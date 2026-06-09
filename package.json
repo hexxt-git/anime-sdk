@@ -1,6 +1,6 @@
 {
   "name": "ani-sdk",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Universal Media Scraper SDK",
   "main": "dist/index.cjs",
   "module": "dist/index.js",
