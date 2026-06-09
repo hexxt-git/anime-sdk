@@ -30,11 +30,13 @@ The SDK has three layers, all wired around a single `HttpClient`:
 
 - `AnimeParadiseProvider`: `api.animeparadise.moe` REST. `/anime/{id}/episode` for the list (sub only). `/ep/{uid}?origin={animeId}` returns the playable HLS link **and** `subData`, which `normalizeSubtitleEntries` (in `utils/subtitles.ts`) turns into VTT-only `ISubtitleTrack[]`. Implements `fetchUnitTracks` cheaply (just `/ep`, no stream URL resolution).
 - `AllmangaProvider`: AllAnime GraphQL → AES-CTR-decrypted `tobeparsed` payload → `Mp4UploadExtractor`, with a `clock.json` fallback for wixmp/sharepoint sources. Source URLs are obfuscated with a `--<hex>` scheme XOR'd with `0x38`; see `decodeAllAnimeSource`. `fetchContentUnits` merges `availableEpisodesDetail.sub` + `.dub` + `.raw` into a single language-agnostic list; unit IDs are `${mediaId}/${epStr}` (legacy `${mediaId}/${epStr}/${lang}` IDs still resolve).
+- `AnikotoProvider`: HTML scrape of `anikototv.to`; uses `anikotoapi.site` for episodes, then delegates to MegaPlay embed for stream/subtitles.
 - `GogoanimeProvider`: HTML scrape of `anineko.to`; vibeplayer embed → `master.m3u8` via `GenericHlsExtractor`.
 - `GoyabuProvider`: pulls a Blogger token from `playersData`, calls Google `batchexecute` to recover the `googlevideo.com` URL via `BloggerExtractor`.
 - `MangadexProvider`: Official JSON API at `api.mangadex.org` for high-quality manga.
-- `WeebcentralProvider`: HTML scrape of `weebcentral.com` for manga.
 - `MangapillProvider`: HTML scrape of `mangapill.com` for manga.
+- `MegaPlayProvider`: AniList GraphQL for search/episodes; resolves directly against MegaPlay's mapping endpoints.
+- `WeebcentralProvider`: HTML scrape of `weebcentral.com` for manga.
 
 All public surface is re-exported from `src/index.ts`, including the shared subtitle utilities (`normalizeSubtitleEntries`, `proxifySubtitleUrl`).
 

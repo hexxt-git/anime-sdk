@@ -13,6 +13,8 @@ A small Typescript SDK for searching anime and manga, listing episodes/chapters,
 | `mangadex`      | `mangadex.org`      | Manga | sub         | no        | Official JSON API at `api.mangadex.org` with cover art and high-quality page resolution.                                                        |
 | `weebcentral`   | `weebcentral.com`   | Manga | sub         | no        | Page scraping; extracts high-quality images with referer protection.                                                                            |
 | `mangapill`     | `mangapill.com`     | Manga | sub         | no        | Page scraping; efficient extraction of chapter page lists and direct image sources.                                                             |
+| `anikoto`       | `anikototv.to`      | Anime | sub, dub    | yes       | Page scraping; uses `anikotoapi.site` for episodes, and `megaplay.buzz` for stream and subtitle extraction.                                     |
+| `megaplay`      | `megaplay.buzz`     | Anime | sub, dub    | yes       | Uses AniList GraphQL for search and episodes, and resolves streams directly against MegaPlay's AniList mapping endpoints.                       |
 
 Every provider has a live E2E test that searches, picks an episode/chapter, resolves
 the stream/pages, and captures a real video frame or verifies page links.
@@ -31,13 +33,15 @@ src/
 │   ├── VidstreamingExtractor  Legacy Gogo encrypt-ajax flow
 │   └── GenericHlsExtractor  Best-effort m3u8/mp4 scrape from an embed page
 ├── providers/
-│   ├── AnimeParadiseProvider
 │   ├── AllmangaProvider
+│   ├── AnikotoProvider
+│   ├── AnimeParadiseProvider
 │   ├── GogoanimeProvider
 │   ├── GoyabuProvider
 │   ├── MangadexProvider
-│   ├── WeebcentralProvider
-│   └── MangapillProvider
+│   ├── MangapillProvider
+│   ├── MegaPlayProvider
+│   └── WeebcentralProvider
 ├── server/index.ts          startServer: HTTP API + /proxy + optional SdkCache
 ├── types/index.ts           IMediaSearchResult, IContentUnit, ISubtitleTrack,
 │                            IUnitTracks, ResolvedMediaStream, SdkCache, …
