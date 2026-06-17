@@ -3,23 +3,32 @@ title: HTTP Server
 description: Run anime-sdk as a standalone HTTP server and call it from any language over HTTP.
 ---
 
-`startServer` launches a Node `http.Server` that exposes the SDK's operations as HTTP routes: `/search`, `/content`, `/stream`, `/tracks`, and (optionally) `/proxy`. Pass the providers you want to expose, plus optional flags for the proxy, a bearer token, and a cache.
+`startServer` launches a Node `http.Server` that exposes the SDK's operations as HTTP routes: content-provider routes (`/search`, `/content`, `/stream`, `/tracks`), metadata routes (`/meta/search`, `/meta/info`, `/meta/content`, `/meta/stream`, `/meta/tracks`, `/meta/browse`), discovery (`/health`, `/openapi.json`), and an optional `/proxy`. Pass the providers and metadata providers you want to expose, plus optional flags for the proxy, a bearer token, and a cache.
 
 ## Starting the server
 
 ```ts
-import { HttpClient, AllmangaProvider, GogoanimeProvider, startServer } from 'anime-sdk';
+import {
+  HttpClient,
+  AllmangaProvider,
+  GogoanimeProvider,
+  AnilistMeta,
+  MalMeta,
+  startServer,
+} from 'anime-sdk';
+
+const http = new HttpClient();
 
 const server = startServer({
-  providers: [
-    new AllmangaProvider(new HttpClient()),
-    new GogoanimeProvider(new HttpClient({ timeoutMs: 10_000 })),
-  ],
-  port: 3000, // default: 3000
-  proxy: true, // optional: enables /proxy and rewrites stream + subtitle URLs through it
+  providers: [new AllmangaProvider(http), new GogoanimeProvider(http)],
+  metaProviders: [new AnilistMeta(http), new MalMeta(http)],
+  port: 3000,
+  proxy: true,
+  proxySignSecret: process.env.PROXY_SECRET, // HMAC-sign /proxy URLs (recommended in prod)
+  proxyAllowedHosts: ['wixstatic.com', 'allanime.day'], // SSRF allowlist (optional)
 });
 
-// server is an http.Server: you can call server.close() to shut it down
+// server is an http.Server — you can call server.close() to shut it down
 ```
 
 The server logs `anime-sdk server listening on http://localhost:3000` when ready.
@@ -58,7 +67,7 @@ Response: `IMediaSearchResult[]`
 
 ### `GET /content`
 
-List episodes for a show or chapters for a manga. One call returns the unified, language-agnostic list: each unit advertises its translations.
+List episodes for a show or chapters for a manga. One call returns the unified, language-agnostic list — each unit advertises its translations.
 
 | Param      | Required | Description               |
 | ---------- | -------- | ------------------------- |
@@ -167,107 +176,96 @@ Response: `IUnitTracks`
 }
 ```
 
-Returns **501** if the provider doesn't implement `fetchUnitTracks`: read subtitles from `/stream`'s response instead.
+Returns **501** if the provider doesn't implement `fetchUnitTracks` — read subtitles from `/stream`'s response instead.
 
-### `GET /download/video/progress` (SSE)
+## Metadata routes
 
-Resolve and download an episode to the server's disk, streaming live progress events via [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events).
+The metadata layer is exposed under `/meta/*`. Each route takes
+`provider=<metaProviderId>` (e.g. `anilist`, `mal`, `kitsu`) and the
+mapping to a content provider happens server-side.
 
-| Param      | Required | Description                |
-| ---------- | -------- | -------------------------- |
-| `unitId`   | ✓        | `id` from a content result |
-| `provider` | ✓        | Provider ID                |
-| `language` |          | `sub` \| `dub` \| `raw`    |
+### `GET /meta/search`
 
 ```sh
-curl -N 'localhost:3000/download/video/progress?unitId=...&provider=allmanga&language=sub'
+curl 'localhost:3000/meta/search?provider=anilist&q=Cowboy%20Bebop'
 ```
 
-Events arrive as `data: <JSON>\n\n`. Three event shapes:
-
-```jsonc
-// While downloading:
-{ "type": "progress", "phase": "downloading", "detail": "Segment 12/45" }
-{ "type": "progress", "phase": "muxing",      "detail": "Muxing segments to MP4 via ffmpeg" }
-
-// On success: retrieve the file with /download/video/file?token=<token>:
-{ "type": "complete", "token": "550e8400-e29b-41d4-a716-446655440000" }
-
-// On failure:
-{ "type": "error", "message": "downloadVideo exhausted all candidates…" }
-```
-
-Progress `phase` values in order: `resolving` → `downloading` → `muxing` → `complete`.
-
-### `GET /download/video/file`
-
-Retrieve a completed video download by token. **One-time**: the file is deleted after the first successful response.
-
-| Param   | Required | Description                                              |
-| ------- | -------- | -------------------------------------------------------- |
-| `token` | ✓        | Token from a `/download/video/progress` `complete` event |
-
-Response: `video/mp4` with `Content-Disposition: attachment`. Tokens expire after **10 minutes**.
+### `GET /meta/info`
 
 ```sh
-curl -OJ 'localhost:3000/download/video/file?token=550e8400-…'
+curl 'localhost:3000/meta/info?provider=anilist&id=anilist:1'
 ```
 
-### `GET /download/manga/chapter/progress` (SSE)
+Returns the full `IMediaMetadata` record: title, description, cover,
+relations (sequel/prequel), characters (with voice actors), staff,
+recommendations, external links, `streamingEpisodes`, and `mappings`
+(cross-source IDs).
 
-Same as `/download/video/progress` but for manga chapters. Downloads all pages and packages them as a ZIP archive.
+The server validates that the URN's prefix matches the meta provider —
+hitting `/meta/info?provider=anilist&id=mal:21` returns 400.
 
-| Param      | Required | Description                |
-| ---------- | -------- | -------------------------- |
-| `unitId`   | ✓        | `id` from a content result |
-| `provider` | ✓        | Provider ID                |
+### `GET /meta/content`
 
-```jsonc
-{ "type": "progress", "downloaded": 8, "total": 24 }
-{ "type": "complete", "token": "…" }
-{ "type": "error",    "message": "…" }
+List episodes/chapters for a meta URN on a specific content provider.
+Mapping is automatic.
+
+```sh
+curl 'localhost:3000/meta/content?provider=anilist&id=anilist:1&contentProvider=allmanga'
 ```
 
-### `GET /download/manga/chapter/file`
+### `GET /meta/stream` / `GET /meta/tracks`
 
-Retrieve a completed chapter ZIP by token (one-time, 10-minute expiry).
+Resolve a stream / tracks by metadata + episode number:
 
-Response: `application/zip` with `Content-Disposition: attachment`.
+```sh
+curl 'localhost:3000/meta/stream?provider=anilist&id=anilist:1&episode=1&contentProvider=allmanga&language=sub'
+```
 
-### `GET /download/video` (direct)
+### `GET /meta/browse`
 
-Download a video without progress streaming. Resolves the stream, downloads to a server temp file via `downloadVideo`, then serves the completed MP4 in one response. Suitable for programmatic use when SSE is inconvenient.
+Trending / popular / seasonal / top from the catalogue:
 
-| Param      | Required | Description             |
-| ---------- | -------- | ----------------------- |
-| `unitId`   | ✓        | Unit ID                 |
-| `provider` | ✓        | Provider ID             |
-| `language` |          | `sub` \| `dub` \| `raw` |
+```sh
+curl 'localhost:3000/meta/browse?provider=anilist&kind=trending&perPage=10'
+curl 'localhost:3000/meta/browse?provider=anilist&kind=seasonal&season=FALL&year=2024'
+```
 
-Response: `video/mp4` with `Content-Disposition: attachment`. Timeout: 20 minutes.
+## Discovery
 
-### `GET /download/manga/page`
+`GET /health` returns a JSON summary of the server's capabilities
+(registered providers, registered meta providers, whether `/proxy` is
+enabled).
 
-Download a single manga page image.
+`GET /openapi.json` returns an OpenAPI 3.1 spec describing every route —
+feed it to Swagger UI / Redoc / a codegen tool.
 
-| Param      | Required | Description                       |
-| ---------- | -------- | --------------------------------- |
-| `unitId`   | ✓        | Unit ID                           |
-| `provider` | ✓        | Provider ID                       |
-| `page`     |          | 0-based page index (default: `0`) |
+## Signing `/proxy` URLs
 
-Response: image file (`image/jpeg`, `image/png`, etc.) with `Content-Disposition: attachment`.
+Setting `proxySignSecret` requires every `/proxy?url=...` to carry a
+matching `sig` HMAC-SHA256 query parameter. The signature is computed over
+`url` plus optional `|h=<h>`. The proxy rewriter automatically signs URLs
+it emits, so callers using `/stream` / `/meta/stream` don't need to know
+about it.
 
-### `GET /download/manga/chapter` (direct)
+```ts
+import * as crypto from 'node:crypto';
+const sig = crypto.createHmac('sha256', secret).update(targetUrl).digest('hex');
+```
 
-Download an entire chapter as a ZIP without progress streaming.
+Unsigned or invalid-signature requests return 401.
 
-| Param      | Required | Description |
-| ---------- | -------- | ----------- |
-| `unitId`   | ✓        | Unit ID     |
-| `provider` | ✓        | Provider ID |
+## SSRF allowlist
 
-Response: `application/zip` with `Content-Disposition: attachment`.
+`proxyAllowedHosts: string[]` restricts `/proxy` to a suffix-matched list
+of upstream hosts. Each entry covers all subdomains:
+
+```ts
+proxyAllowedHosts: ['wixstatic.com', 'allanime.day', 'mp4upload.com'];
+```
+
+Targets outside the list return 403. When unset, all hosts are allowed —
+fine for local development, risky in production (the server otherwise
+becomes an open relay).
 
 ## Authentication
 
@@ -300,7 +298,7 @@ interface SdkCache {
 }
 ```
 
-A plain `Map` satisfies it. Bring whatever store you like (Redis, SQLite, edge KV):
+A plain `Map` satisfies it — bring whatever store you like (Redis, SQLite, edge KV):
 
 ```ts
 const store = new Map();
@@ -319,12 +317,12 @@ startServer({
 
 Keys are namespaced so different endpoints can have different policies:
 
-| Prefix     | Key shape                             | Notes                                                             |
-| ---------- | ------------------------------------- | ----------------------------------------------------------------- |
-| `search:`  | `search:<providerId>:<query>`         | Stable; safe to cache for long.                                   |
-| `content:` | `content:<providerId>:<mediaId>`      | Stable; safe to cache for long.                                   |
-| `stream:`  | `stream:<providerId>:<unitId>:<lang>` | Stream URLs may carry signed expiries: apply a short TTL or skip. |
-| `tracks:`  | `tracks:<providerId>:<unitId>:<lang>` | Cheap to compute when the provider supports it; cache freely.     |
+| Prefix     | Key shape                             | Notes                                                              |
+| ---------- | ------------------------------------- | ------------------------------------------------------------------ |
+| `search:`  | `search:<providerId>:<query>`         | Stable; safe to cache for long.                                    |
+| `content:` | `content:<providerId>:<mediaId>`      | Stable; safe to cache for long.                                    |
+| `stream:`  | `stream:<providerId>:<unitId>:<lang>` | Stream URLs may carry signed expiries — apply a short TTL or skip. |
+| `tracks:`  | `tracks:<providerId>:<unitId>:<lang>` | Cheap to compute when the provider supports it; cache freely.      |
 
 `get` returns `undefined` for a miss; any other value (including `null`) is treated as a hit and served as-is. To skip caching a specific endpoint, inspect the prefix in your `set` and bail out.
 

@@ -1,9 +1,10 @@
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 import { HttpClient } from '../transport/http.js';
 import { DomRegistry } from '../transport/dom.js';
 import {
   IMediaSearchResult,
   IContentUnit,
+  IMediaMappings,
   ResolvedMediaStream,
   MediaCatalogType,
   ContentLanguage,
@@ -20,6 +21,16 @@ export class MegaPlayProvider extends BaseProvider {
   public readonly name = 'MegaPlay';
   public override readonly supportedTypes: MediaCatalogType[] = ['ANIME'];
 
+  /**
+   * MegaPlay indexes its catalogue by AniList ID directly — its internal
+   * `mediaId` IS the AniList ID. Surface that to `MappingClient` so it
+   * can skip MALSync/Anify/fuzzy entirely when the meta record knows the
+   * AniList ID.
+   */
+  public override async lookupByMapping(mappings: IMediaMappings): Promise<string | null> {
+    return mappings.anilist != null ? String(mappings.anilist) : null;
+  }
+
   private readonly baseUrl: string;
   private readonly anilistApi = 'https://graphql.anilist.co';
 
@@ -33,7 +44,10 @@ export class MegaPlayProvider extends BaseProvider {
     }
   }
 
-  public override async search(query: string): Promise<IMediaSearchResult[]> {
+  protected override async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     const graphqlQuery = `
       query ($search: String) {
         Page (page: 1, perPage: 15) {
@@ -52,10 +66,14 @@ export class MegaPlayProvider extends BaseProvider {
       }
     `;
 
-    const response = await this.http.post(this.anilistApi, {
-      query: graphqlQuery,
-      variables: { search: query },
-    });
+    const response = await this.http.post(
+      this.anilistApi,
+      {
+        query: graphqlQuery,
+        variables: { search: query },
+      },
+      { signal: options.signal },
+    );
 
     const json = (await response.json()) as any;
     if (!json.data || !json.data.Page || !json.data.Page.media) {
@@ -73,7 +91,10 @@ export class MegaPlayProvider extends BaseProvider {
     );
   }
 
-  public override async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
+  protected override async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
     // Fetch episode count from AniList if not provided
     const graphqlQuery = `
       query ($id: Int) {
@@ -83,10 +104,14 @@ export class MegaPlayProvider extends BaseProvider {
       }
     `;
 
-    const response = await this.http.post(this.anilistApi, {
-      query: graphqlQuery,
-      variables: { id: parseInt(mediaId) },
-    });
+    const response = await this.http.post(
+      this.anilistApi,
+      {
+        query: graphqlQuery,
+        variables: { id: parseInt(mediaId) },
+      },
+      { signal: options.signal },
+    );
 
     const json = (await response.json()) as any;
     const episodesCount = json.data?.Media?.episodes || 1; // Default to 1 if unknown
@@ -104,9 +129,10 @@ export class MegaPlayProvider extends BaseProvider {
     return units;
   }
 
-  public override async resolveStream(
+  protected override async resolveStreamRaw(
     unitId: string,
     language: ContentLanguage = 'sub',
+    options: CallOptions = {},
   ): Promise<ResolvedMediaStream> {
     const [aniId, epNum] = unitId.split(':');
     const embedUrl = `${this.baseUrl}/stream/ani/${aniId}/${epNum}/${language}`;
@@ -114,6 +140,7 @@ export class MegaPlayProvider extends BaseProvider {
     // Step 1: Fetch the embed page to get the file ID
     // Note: referer is important for some endpoints
     const embedResponse = await this.http.get(embedUrl, {
+      signal: options.signal,
       headers: {
         Referer: this.baseUrl,
       },
@@ -135,6 +162,7 @@ export class MegaPlayProvider extends BaseProvider {
 
     // Step 2: Fetch the sources using the file ID
     const sourcesResponse = await this.http.get(`${this.baseUrl}/stream/getSources?id=${fileId}`, {
+      signal: options.signal,
       headers: {
         Referer: `${this.baseUrl}/stream/ani/${aniId}/${epNum}/${language}`,
         'X-Requested-With': 'XMLHttpRequest',

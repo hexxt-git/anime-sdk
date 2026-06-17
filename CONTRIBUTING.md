@@ -3,17 +3,16 @@
 ## Prerequisites
 
 - Node 20+ and `ffmpeg` on `PATH` (E2E tests shell out to it)
-- `pnpm` or `npm` — both work, `pnpm-lock.yaml` is checked in
 
 ## Setup
 
 ```sh
 git clone https://github.com/hexxt-git/anime-sdk
 cd anime-sdk
-npm install        # or: pnpm install
+npm install
 
 npm run test:run   # unit + live E2E (~60–90s, requires internet)
-npm run build      # tsc → dist/
+npm run build      # tsup → dist/ (ESM + CJS + .d.ts)
 ```
 
 ## What's welcome
@@ -24,20 +23,24 @@ npm run build      # tsc → dist/
 
 **New extractors** — only when the embed format is genuinely novel and none of the four existing extractors (`GenericHlsExtractor`, `Mp4UploadExtractor`, `BloggerExtractor`, `VidstreamingExtractor`) can handle it.
 
-**Unit tests** — edge cases in `HlsUtils`, extractor HTML parsing, language inference. These run without a network.
+**Metadata provider improvements** — extending `MalMeta` / `KitsuMeta` with characters/staff/recommendations parity, batch fetching for AniList, or richer Anify/arm-server integration. Any new field must be live-tested against the real upstream.
 
-**Transport / HTTP server improvements** — proxy mode extensions, better curl fallback diagnostics, new server routes, Bun compatibility.
+**Mapping-client improvements** — better fuzzy-match heuristics for tricky titles (multi-season shows, abbreviations, romanization variants), provider-specific `lookupByMapping` implementations for sites that index by external ID.
+
+**Unit / pure-logic tests** — edge cases in `HlsUtils`, extractor HTML parsing, language inference, URN helpers, similarity scoring, rate limiter, retry policy. These run without a network.
+
+**Transport / HTTP server improvements** — proxy mode extensions, better curl fallback diagnostics, new server routes, custom `HttpTransport` implementations (Undici dispatcher, Bun compatibility, etc.).
 
 ## What's out of scope
 
-| Area                             | Reason                                                                                                 |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Browser / frontend support       | The SDK depends on `child_process`, Node-specific crypto, and shell-out for E2E tests                  |
-| UI components or players         | anime-sdk is headless                                                                                  |
-| Login-gated or paywall sites     | Publicly accessible streams only                                                                       |
-| Caching or rate-limiting layers  | Application-layer concern, not the SDK's                                                               |
-| CLI wrappers or download scripts | Use the HTTP server or import the SDK directly                                                         |
-| Mocked E2E tests                 | All E2E tests must hit live sites — a mock that passes while the real site fails is worse than no test |
+| Area                                    | Reason                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Browser / frontend support              | The SDK depends on `child_process`, Node-specific crypto, and shell-out for E2E tests                  |
+| UI components or players                | anime-sdk is headless                                                                                  |
+| Login-gated or paywall sites            | Publicly accessible streams only                                                                       |
+| CLI wrappers or download scripts        | Use the HTTP server or import the SDK directly                                                         |
+| Mocked E2E tests                        | All E2E tests must hit live sites — a mock that passes while the real site fails is worse than no test |
+| Tests with graceful skip-on-unreachable | A skipped test is a lie. Test must pass or be deleted. See `CLAUDE.md` for the full rule.              |
 
 ## Adding a provider — complete steps
 

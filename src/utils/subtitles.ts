@@ -1,3 +1,4 @@
+import * as crypto from 'node:crypto';
 import { ISubtitleTrack } from '../types/index.js';
 
 /**
@@ -79,6 +80,13 @@ export interface ProxifySubtitleOptions {
   headers?: Record<string, string>;
   /** Override Content-Type on the proxy response (defaults to `text/vtt` for VTT). */
   contentType?: string;
+  /**
+   * When set, append an HMAC-SHA256 `sig` parameter computed over `url`
+   * (and `h=` payload, when present) keyed by this secret. Matches the
+   * scheme used by the server's `/proxy` endpoint when `proxySignSecret`
+   * is configured.
+   */
+  signSecret?: string;
 }
 
 /**
@@ -105,5 +113,11 @@ export function proxifySubtitleUrl(
   const parts = [`url=${encodeURIComponent(track.url)}`];
   if (ct) parts.push(`ct=${encodeURIComponent(ct)}`);
   if (hParam) parts.push(`h=${encodeURIComponent(hParam)}`);
+  if (options.signSecret) {
+    const h = crypto.createHmac('sha256', options.signSecret);
+    h.update(track.url);
+    if (hParam) h.update('|h=' + hParam);
+    parts.push(`sig=${h.digest('hex')}`);
+  }
   return `${proxyBase}?${parts.join('&')}`;
 }

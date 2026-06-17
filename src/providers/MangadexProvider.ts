@@ -6,11 +6,12 @@ import {
   MediaCatalogType,
   ContentLanguage,
 } from '../types/index.js';
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 
 export class MangadexProvider extends BaseProvider {
   readonly id = 'mangadex';
   readonly supportedTypes: MediaCatalogType[] = ['MANGA'];
+  public static override readonly malsyncSites = ['MangaDex', 'Mangadex'] as const;
 
   private readonly apiUrl = 'https://api.mangadex.org';
   private readonly coverUrlBase = 'https://uploads.mangadex.org/covers';
@@ -19,12 +20,15 @@ export class MangadexProvider extends BaseProvider {
     super(http);
   }
 
-  async search(query: string): Promise<IMediaSearchResult[]> {
+  protected async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     const url = `${this.apiUrl}/manga?title=${encodeURIComponent(
       query,
     )}&includes[]=cover_art&limit=24&contentRating[]=safe&contentRating[]=suggestive&hasAvailableChapters=true`;
 
-    const res = await this.http.get(url);
+    const res = await this.http.get(url, { signal: options.signal });
     const data = (await res.json()) as any;
 
     const results: IMediaSearchResult[] = [];
@@ -36,6 +40,7 @@ export class MangadexProvider extends BaseProvider {
       const thumbnailUrl = coverFileName
         ? `${this.coverUrlBase}/${manga.id}/${coverFileName}.256.jpg`
         : undefined;
+      const yearRaw = manga.attributes.year as number | null | undefined;
 
       results.push({
         id: manga.id,
@@ -44,13 +49,17 @@ export class MangadexProvider extends BaseProvider {
         catalogType: 'MANGA',
         providerId: this.id,
         availableLanguages: ['sub'],
+        year: typeof yearRaw === 'number' ? yearRaw : undefined,
       });
     }
 
     return results;
   }
 
-  async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
+  protected async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
     const units: IContentUnit[] = [];
     let offset = 0;
     const limit = 500;
@@ -59,7 +68,7 @@ export class MangadexProvider extends BaseProvider {
     do {
       const url = `${this.apiUrl}/manga/${mediaId}/feed?limit=${limit}&offset=${offset}&order[chapter]=asc&contentRating[]=safe&contentRating[]=suggestive&contentRating[]=erotica&contentRating[]=pornographic&includeExternalUrl=0`;
 
-      const res = await this.http.get(url);
+      const res = await this.http.get(url, { signal: options.signal });
       const data = (await res.json()) as any;
 
       total = data.total;
@@ -84,9 +93,13 @@ export class MangadexProvider extends BaseProvider {
     return units;
   }
 
-  async resolveStream(unitId: string, language?: ContentLanguage): Promise<ResolvedMediaStream> {
+  protected async resolveStreamRaw(
+    unitId: string,
+    language?: ContentLanguage,
+    options: CallOptions = {},
+  ): Promise<ResolvedMediaStream> {
     const url = `${this.apiUrl}/at-home/server/${unitId}`;
-    const res = await this.http.get(url);
+    const res = await this.http.get(url, { signal: options.signal });
     const data = (await res.json()) as any;
 
     const baseUrl = data.baseUrl;

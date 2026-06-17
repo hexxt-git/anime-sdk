@@ -3,7 +3,9 @@ title: Getting Started
 description: Install anime-sdk and resolve your first anime stream in minutes.
 ---
 
-A small Typescript SDK for searching anime and manga, listing episodes/chapters, and resolving direct stream/page URLs (with subtitle tracks). Nine providers, a handful of reusable embed extractors, a pluggable HTTP transport, and an optional HTTP server with a stream/subtitle proxy and a bring-your-own cache hook.
+anime-sdk is a Typescript SDK that searches anime/manga catalogues (AniList, MAL, Kitsu), resolves direct video stream URLs and manga page URLs across multiple content providers, and lets you swap content providers without changing call sites.
+
+It has four layers: HTTP transport (with per-host rate limiting, retry, AbortSignal, and a pluggable curl fallback), extractors (embed parsers), content providers (site-specific scraping logic), and metadata providers (catalogue-level data with cross-source mapping). Everything connects through `HttpClient`.
 
 ## Requirements
 
@@ -166,6 +168,48 @@ import { AllmangaProvider } from 'anime-sdk';
 const provider = new AllmangaProvider(new HttpClient());
 // same: search → fetchContentUnits → resolveStream
 ```
+
+## Unified URN IDs
+
+Every ID returned by the SDK is a URN — `${providerId}:${rawId}`:
+
+```
+allmanga:5jzpRTJWnubrgHm5G          → media URN
+allmanga:5jzpRTJWnubrgHm5G/1        → content unit URN
+anilist:1                           → metadata URN (single namespace)
+mal:anime:21  /  kitsu:manga:13     → typed catalogue URN (anime/manga distinction)
+```
+
+The first colon is the separator; raw IDs may themselves contain colons or slashes. The metadata layer's `MappingClient` translates between catalogue and content-provider namespaces automatically, so you can swap content providers without changing your data layer.
+
+## Metadata layer
+
+Use AniList / MAL / Kitsu as a unified catalogue front-end, then pipe to any content provider for actual playback. The mapping (anilist id → site raw id) is resolved through a cache → provider native lookup → MALSync/Anify/arm-server → fuzzy waterfall.
+
+```ts
+import { HttpClient, AnilistMeta, AllmangaProvider } from 'anime-sdk';
+
+const http = new HttpClient();
+const meta = new AnilistMeta(http);
+const allmanga = new AllmangaProvider(http);
+
+const info = await meta.fetchMediaInfo('anilist:1'); // full IMediaMetadata
+const stream = await meta.resolveStream('anilist:1', 1, allmanga, 'sub');
+```
+
+The metadata object includes relations (sequel/prequel), characters with voice actors, staff, recommendations, external links (Crunchyroll, …) and per-episode `streamingEpisodes` with titles + thumbnails (and filler/recap flags when sourced from MAL).
+
+## Cancellation
+
+Every method accepts an optional `CallOptions.signal`:
+
+```ts
+const ac = new AbortController();
+setTimeout(() => ac.abort(), 1500);
+await meta.search('frieren', { signal: ac.signal });
+```
+
+The signal is threaded all the way down to `fetch`, the rate-limiter queue, and the retry loop.
 
 ## Next steps
 

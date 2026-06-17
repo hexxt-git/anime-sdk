@@ -1,11 +1,16 @@
 ---
 title: Providers
-description: Overview of the 9 live-tested anime and manga providers in anime-sdk.
+description: Overview of the nine live-tested anime and manga providers in anime-sdk.
 ---
 
-A provider is a site-specific adapter that maps search queries and episode/chapter IDs to direct stream or image URLs. All 9 ship with anime-sdk and are verified on every release.
+anime-sdk ships two kinds of providers:
 
-## Available providers
+- **Content providers** — site-specific adapters that map search queries and episode/chapter IDs to direct stream or image URLs.
+- **Metadata providers** — catalogue front-ends (AniList, MAL, Kitsu) that surface rich title data (relations, characters, recommendations, per-episode streamingEpisodes) and let you swap content providers without changing your data layer.
+
+All providers are verified on every release with live, non-mocked E2E tests.
+
+## Content providers
 
 | ID            | Website           | Content Type | Languages     | Subtitles | Method            |
 | ------------- | ----------------- | ------------ | ------------- | --------- | ----------------- |
@@ -19,7 +24,21 @@ A provider is a site-specific adapter that maps search queries and episode/chapt
 | weebcentral   | weebcentral.com   | MANGA        | sub           | no        | HTML scrape       |
 | mangapill     | mangapill.com     | MANGA        | sub           | no        | HTML scrape       |
 
-All extend `BaseProvider` and expose identical method signatures. `AnimeParadiseProvider` additionally implements the optional `fetchUnitTracks` for cheap subtitle/quality metadata.
+All extend `BaseProvider` and expose identical method signatures. `AnimeParadiseProvider` and `AnikotoProvider` additionally implement the optional `fetchUnitTracks` for cheap subtitle/quality metadata. `MegaPlayProvider` implements `lookupByMapping` (its media ID is the AniList ID).
+
+## Metadata providers
+
+| ID      | Catalogue       | Native ID shape | Enrichments                                                                                                                                             |
+| ------- | --------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| anilist | AniList GraphQL | `anilist:21`    | Full metadata + relations + characters (with VAs) + staff + recommendations + externalLinks + streamingEpisodes + browse(trending/popular/seasonal/top) |
+| mal     | MyAnimeList     | `mal:anime:21`  | filler/recap via Jikan + relations + browse(top/popular/seasonal)                                                                                       |
+| kitsu   | Kitsu JSON:API  | `kitsu:anime:1` | core metadata + cross-source mappings (AniList/MAL/AniDB/TVDB)                                                                                          |
+
+All extend `BaseMetadataProvider` and share the contract `search` →
+`fetchMediaInfo` → `fetchContentUnits(metaUrn, contentProvider)` →
+`resolveStream(metaUrn, episodeNumber, contentProvider, language?)`. The
+mapping (catalogue ID → content provider raw ID) is handled by
+`MappingClient` via a cache → provider native lookup → MALSync/Anify/arm-server → fuzzy waterfall.
 
 ## Swapping providers
 
@@ -28,7 +47,7 @@ All extend `BaseProvider` and expose identical method signatures. `AnimeParadise
 import { GogoanimeProvider } from 'anime-sdk';
 const provider = new GogoanimeProvider(client);
 
-// After: nothing else changes
+// After — nothing else changes
 import { AllmangaProvider } from 'anime-sdk';
 const provider = new AllmangaProvider(client);
 
@@ -51,7 +70,7 @@ These tests run without mocking. If a provider's upstream site changes its API o
 
 ## Selecting a provider
 
-**AllManga** is the best choice for breadth: widest catalogue, sub + dub, stable GraphQL API.
+**AllManga** is the best choice for breadth — widest catalogue, sub + dub, stable GraphQL API.
 
 **AnimeParadise** is the best choice when you want **external subtitle tracks** that the SDK can hand straight to a `<track>` element (the others bake subs into the video).
 
@@ -63,7 +82,7 @@ These tests run without mocking. If a provider's upstream site changes its API o
 
 **Goyabu** is the only option for Brazilian Portuguese content.
 
-**MangaDex** is the gold standard for Manga: huge database, reliable JSON API, and clean images.
+**MangaDex** is the gold standard for Manga — huge database, reliable JSON API, and clean images.
 
 **WeebCentral** and **MangaPill** are reliable fallbacks for Manga titles not found on MangaDex.
 

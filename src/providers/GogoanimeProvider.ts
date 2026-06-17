@@ -1,4 +1,4 @@
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 import { HttpClient } from '../transport/http.js';
 import { DomRegistry } from '../transport/dom.js';
 import { GenericHlsExtractor } from '../extractors/GenericHlsExtractor.js';
@@ -34,9 +34,12 @@ export class GogoanimeProvider extends BaseProvider {
   /**
    * Search for anime on AniNeko.
    */
-  public async search(query: string): Promise<IMediaSearchResult[]> {
+  protected async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     const searchUrl = `${this.baseUrl}/browser?keyword=${encodeURIComponent(query)}`;
-    const response = await this.http.get(searchUrl);
+    const response = await this.http.get(searchUrl, { signal: options.signal });
     if (response.status !== 200) {
       throw new Error(`GogoAnime search failed with status ${response.status}`);
     }
@@ -82,7 +85,10 @@ export class GogoanimeProvider extends BaseProvider {
   /**
    * Fetch all content units (episodes) for a given AniNeko anime ID (e.g., "/watch/slug").
    */
-  public async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
+  protected async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
     let watchUrlPath = mediaId;
     // Normalize path to watch page if it is an episode URL
     if (mediaId.includes('/watch/')) {
@@ -98,7 +104,7 @@ export class GogoanimeProvider extends BaseProvider {
     }
 
     const fullUrl = `${this.baseUrl}${watchUrlPath.startsWith('/') ? '' : '/'}${watchUrlPath}`;
-    const response = await this.http.get(fullUrl);
+    const response = await this.http.get(fullUrl, { signal: options.signal });
     if (response.status !== 200) {
       throw new Error(`Failed to fetch AniNeko watch page: ${response.status}`);
     }
@@ -141,12 +147,13 @@ export class GogoanimeProvider extends BaseProvider {
   /**
    * Resolve playback stream for a specific content unit (episode) URL path.
    */
-  public async resolveStream(
+  protected async resolveStreamRaw(
     unitId: string,
     _language?: import('../types/index.js').ContentLanguage,
+    options: CallOptions = {},
   ): Promise<ResolvedMediaStream> {
     const fullUrl = `${this.baseUrl}${unitId.startsWith('/') ? '' : '/'}${unitId}`;
-    const response = await this.http.get(fullUrl);
+    const response = await this.http.get(fullUrl, { signal: options.signal });
     if (response.status !== 200) {
       throw new Error(`Failed to fetch AniNeko episode page: ${response.status}`);
     }

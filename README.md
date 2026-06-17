@@ -1,8 +1,27 @@
 # anime-sdk
 
-A Typescript SDK for searching anime and manga, listing episodes/chapters, and resolving direct stream/page URLs (with subtitle tracks). Nine providers, a handful of reusable embed extractors, a pluggable HTTP transport, and an optional HTTP server with a stream/subtitle proxy and a bring-your-own cache hook.
+A Typescript SDK for searching anime and manga across multiple catalogue sources and content providers, normalizing them behind a single API, and resolving direct playable streams or page URLs (with subtitle tracks).
 
 [anime-sdk.hexxt.dev](https://animesdk.hexxt.dev/)
+
+What's in the box:
+
+- **Nine content providers** (anime + manga) with live, non-mocked E2E tests.
+- **Three metadata providers** — AniList, MAL (Jikan), Kitsu — with full
+  enrichments (relations, characters, staff, recommendations, external
+  links, per-episode `streamingEpisodes` with Jikan filler/recap flags).
+- **Unified URN ID space** (`provider:rawId`) so you can swap a content
+  provider without rewriting your call sites.
+- **Cross-source mapping** via a four-step waterfall (cache → provider
+  native lookup → MALSync/Anify/arm-server → fuzzy title match with year +
+  catalogType discriminators and episode-count cross-check).
+- **A pluggable HTTP transport** (curl fallback included), with built-in
+  per-host rate limiting, exponential-backoff retry honouring `Retry-After`,
+  and end-to-end `AbortSignal` propagation.
+- **Built-in downloads** for anime (HLS → MP4) and manga (chapters → ZIP).
+- **An optional HTTP server** with content + metadata + download routes,
+  a header-forwarding `/proxy` (HMAC-signable + suffix-matched SSRF
+  allowlist) and a `GET /openapi.json` spec for client codegen.
 
 ## Providers
 
@@ -21,12 +40,23 @@ A Typescript SDK for searching anime and manga, listing episodes/chapters, and r
 Every provider has a live E2E test that searches, picks an episode/chapter, resolves
 the stream/pages, and captures a real video frame or verifies page links.
 
+## Metadata providers
+
+| ID        | Catalogue       | Native ID shape | Enrichments                                                                                                                       |
+| --------- | --------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `anilist` | AniList GraphQL | `anilist:21`    | full metadata + relations + characters (with voice actors) + staff + recommendations + externalLinks + streamingEpisodes + browse |
+| `mal`     | MyAnimeList     | `mal:anime:21`  | filler/recap flags via Jikan episodes + relations + browse(top/popular/seasonal)                                                  |
+| `kitsu`   | Kitsu JSON:API  | `kitsu:anime:1` | core metadata + cross-source mappings (AniList/MAL/AniDB/TVDB)                                                                    |
+
 ## Architecture
 
 ```
 src/
 ├── transport/
-│   ├── http.ts              HttpClient: fetch + curl fallback, proxy routing
+│   ├── http.ts              HttpClient: rate-limit + retry + AbortSignal + pluggable transport
+│   ├── transport.ts         HttpTransport interface; CurlFallbackTransport (default), FetchTransport
+│   ├── rateLimiter.ts       Per-host token bucket with secondary burst window
+│   ├── retry.ts             withRetry + Retry-After parser
 │   ├── dom.ts               DOMParser registry (auto-registers linkedom in Node)
 │   └── hlsUtils.ts          Rewrite m3u8 chunk URLs through a proxy
 ├── extractors/
@@ -35,22 +65,38 @@ src/
 │   ├── VidstreamingExtractor  Legacy Gogo encrypt-ajax flow
 │   └── GenericHlsExtractor  Best-effort m3u8/mp4 scrape from an embed page
 ├── providers/
-│   ├── AllmangaProvider
-│   ├── AnikotoProvider
-│   ├── AnimeParadiseProvider
-│   ├── GogoanimeProvider
-│   ├── GoyabuProvider
-│   ├── MangadexProvider
-│   ├── MangapillProvider
-│   ├── MegaPlayProvider
-│   └── WeebcentralProvider
-├── server/index.ts          startServer: HTTP API + /proxy + optional SdkCache
-├── types/index.ts           IMediaSearchResult, IContentUnit, ISubtitleTrack,
-│                            IUnitTracks, ResolvedMediaStream, SdkCache, …
+│   ├── BaseProvider         URN wrap/unwrap, concurrency cap, lookupByMapping hook, malsyncSites
+│   ├── AllmangaProvider, AnikotoProvider, AnimeParadiseProvider, GogoanimeProvider,
+│   ├── GoyabuProvider, MangadexProvider, MangapillProvider, MegaPlayProvider, WeebcentralProvider
+├── meta/
+│   ├── BaseMetadataProvider Episode picking + IContentUnit enrichment + absolute-episode rescue
+│   ├── AnilistMeta, MalMeta, KitsuMeta
+│   ├── MappingClient        cache → provider → MALSync/Anify/arm-server → fuzzy waterfall
+│   └── similarity.ts        normalizeTitle, dice + token Jaccard + prefix composite
+├── download/                Built-in HLS → MP4 and chapter → ZIP download helpers
+├── server/index.ts          startServer: /search, /content, /stream, /tracks, /meta/*, /download/*, /proxy, /openapi.json, /health
+├── types/index.ts           CallOptions, IMediaSearchResult, IMediaMetadata, IContentUnit, …
 └── utils/
     ├── crypto.ts            AES-CBC + AES-CTR helpers
-    └── subtitles.ts         normalizeSubtitleEntries, proxifySubtitleUrl
+    ├── subtitles.ts         normalizeSubtitleEntries, proxifySubtitleUrl (with signSecret)
+    └── urn.ts               buildUrn, unwrapUrn, strictUnwrapUrn, buildTypedUrn, parseTypedUrn
 ```
+
+### Unified URN IDs
+
+Every `id` flowing in or out of the SDK has shape `${providerId}:${rawId}`:
+
+```
+allmanga:5jzpRTJWnubrgHm5G          # media URN
+allmanga:5jzpRTJWnubrgHm5G/1        # content-unit URN
+anilist:21                          # meta URN (single ID namespace)
+mal:anime:21                        # typed catalogue URN (anime/manga distinction)
+kitsu:manga:13                      # typed catalogue URN
+```
+
+The first colon is the separator; raw IDs may themselves contain colons or
+slashes. Use `strictUnwrapUrn` when a URN must belong to a specific
+provider (the server enforces this on `/meta/info`).
 
 A provider is just a class with `search`, `fetchContentUnits`, and
 `resolveStream`. `fetchContentUnits` is language-agnostic — it returns one
@@ -84,31 +130,96 @@ if (pages.type === 'manga') {
 }
 ```
 
-### HTTP server with proxy + cache
+### Cross-source: metadata + content provider
+
+The metadata layer lets you swap content providers without changing
+anything else. Mapping (AniList ID → AllManga raw ID) happens
+automatically:
 
 ```ts
-import { HttpClient, startServer, AllmangaProvider, MangadexProvider } from 'anime-sdk';
+import {
+  HttpClient,
+  AnilistMeta,
+  MappingClient,
+  AllmangaProvider,
+  GogoanimeProvider,
+} from 'anime-sdk';
 
-const store = new Map(); // satisfies the SdkCache get/set contract
+const http = new HttpClient();
+const mapping = new MappingClient(http);
+const meta = new AnilistMeta(http, { mappingClient: mapping });
+
+// Pull rich metadata from AniList (relations, characters, streamingEpisodes…)
+const info = await meta.fetchMediaInfo('anilist:1');
+console.log(info.title.english, info.streamingEpisodes?.[0].title);
+
+// Resolve a stream on any content provider using the same AniList URN.
+const allmanga = new AllmangaProvider(http);
+const stream = await meta.resolveStream('anilist:1', 1, allmanga, 'sub');
+
+// Or swap to a different content provider — no other changes.
+const gogo = new GogoanimeProvider(http);
+const stream2 = await meta.resolveStream('anilist:1', 1, gogo, 'sub');
+```
+
+### Browse the catalogue
+
+```ts
+const trending = await meta.browse('trending', { catalogType: 'ANIME', perPage: 10 });
+const seasonal = await meta.browse('seasonal', { season: 'FALL', year: 2024 });
+const top = await meta.browse('top');
+```
+
+### HTTP server with proxy + cache + metadata routes
+
+```ts
+import {
+  HttpClient,
+  startServer,
+  AllmangaProvider,
+  MangadexProvider,
+  AnilistMeta,
+  MalMeta,
+} from 'anime-sdk';
+
+const http = new HttpClient();
+const store = new Map();
 const cache = {
   get: (key) => store.get(key),
   set: (key, value) => void store.set(key, value),
 };
 
 startServer({
-  providers: [new AllmangaProvider(new HttpClient()), new MangadexProvider(new HttpClient())],
+  providers: [new AllmangaProvider(http), new MangadexProvider(http)],
+  metaProviders: [new AnilistMeta(http), new MalMeta(http)],
   port: 3000,
-  proxy: true, // /search, /content, /stream, /tracks, /proxy
-  cache, // memoize provider calls by namespaced key
+  proxy: true,
+  proxySignSecret: process.env.PROXY_SECRET, // optional: signs /proxy URLs
+  proxyAllowedHosts: ['wixstatic.com', 'allanime.day'], // optional SSRF allowlist
+  cache,
 });
 ```
 
-Routes: `GET /search`, `GET /content`, `GET /stream`, `GET /tracks`
-(returns 501 when the provider has no cheap metadata path), and
-`GET /proxy` for stream + subtitle fetching with header forwarding and
-auto-rewritten HLS manifests. Subtitle URLs in `/stream` and `/tracks`
-responses are automatically routed through `/proxy` so browsers don't hit
-CORS / `Content-Type` issues with VTT files.
+Routes the server exposes:
+
+| Route                         | Purpose                                                                                |
+| ----------------------------- | -------------------------------------------------------------------------------------- |
+| `GET /search`                 | Search a content provider                                                              |
+| `GET /content`                | Episode/chapter list for a media URN                                                   |
+| `GET /stream`                 | Resolve a playable stream for a unit URN                                               |
+| `GET /tracks`                 | Cheap subtitle/quality list (501 if provider doesn't support it)                       |
+| `GET /meta/search`            | Search a metadata catalogue                                                            |
+| `GET /meta/info`              | Full `IMediaMetadata` for a meta URN                                                   |
+| `GET /meta/content`           | Episode list for a meta URN, resolved via a content provider                           |
+| `GET /meta/stream`            | Resolve a stream by metadata + episode number                                          |
+| `GET /meta/tracks`            | Cheap tracks for an episode (501 if provider doesn't support it)                       |
+| `GET /meta/browse`            | Trending / popular / seasonal / top                                                    |
+| `GET /download/video`         | Download an anime episode as MP4                                                       |
+| `GET /download/manga/page`    | Download a single manga page                                                           |
+| `GET /download/manga/chapter` | Download a manga chapter as a ZIP                                                      |
+| `GET /proxy`                  | CORS-friendly upstream proxy (header forwarding, HLS rewrite, optional HMAC signature) |
+| `GET /openapi.json`           | OpenAPI 3.1 spec describing every route                                                |
+| `GET /health`                 | Health + capability check                                                              |
 
 ### Direct extractor use
 
@@ -121,6 +232,18 @@ import { HttpClient, BloggerExtractor } from 'anime-sdk';
 
 const blogger = new BloggerExtractor(new HttpClient());
 const streams = await blogger.extract('https://www.blogger.com/video.g?token=AD6v5dw…');
+```
+
+### Cancellation
+
+Every public method takes a `CallOptions` bag with an optional
+`AbortSignal`. It's threaded all the way down to `fetch`, the rate
+limiter (so a long queue can be drained on abort), and the retry loop.
+
+```ts
+const ac = new AbortController();
+setTimeout(() => ac.abort(), 1500);
+const results = await meta.search('frieren', { signal: ac.signal });
 ```
 
 ## Tests
@@ -151,6 +274,10 @@ The E2E suite is intentionally not mocked. Each test:
 
 Screenshots land in `scratch/screenshots/screenshot_<provider>.png`.
 `scratch/` is gitignored.
+
+The tests are **all real**. See `CLAUDE.md` for the non-negotiable testing
+rules — short version: no mocked network requests, no fake/fixture data,
+no graceful skipping. A test must pass for real or be deleted.
 
 ## Requirements
 

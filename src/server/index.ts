@@ -2,10 +2,21 @@ import * as http from 'node:http';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as nodeCrypto from 'node:crypto';
 import { Readable } from 'node:stream';
 import { BaseProvider } from '../providers/BaseProvider.js';
-import { ContentLanguage, IUnitTracks, ResolvedMediaStream, SdkCache } from '../types/index.js';
+import { BaseMetadataProvider, BrowseKind } from '../meta/BaseMetadataProvider.js';
+import {
+  ContentLanguage,
+  IUnitTracks,
+  MediaCatalogType,
+  MediaFormat,
+  MediaSeason,
+  ResolvedMediaStream,
+  SdkCache,
+} from '../types/index.js';
 import { proxifySubtitleUrl } from '../utils/subtitles.js';
+import { strictUnwrapUrn } from '../utils/urn.js';
 import {
   downloadVideo,
   downloadMangaPage,
@@ -15,6 +26,12 @@ import {
 
 export interface ServerOptions {
   providers: BaseProvider[];
+  /**
+   * Metadata providers exposed under `/meta/*`. AniList, MAL (Jikan), and
+   * Kitsu providers all implement {@link BaseMetadataProvider} — pass any
+   * combination, and `/meta/*` callers select with `?provider=<id>`.
+   */
+  metaProviders?: BaseMetadataProvider[];
   port?: number;
   auth?: { token: string };
   /**
@@ -23,10 +40,36 @@ export interface ServerOptions {
    */
   proxy?: boolean;
   /**
+   * Explicit `proxyBase` URL. When omitted (default), the server derives
+   * the base from each incoming request's `Host` header — so the SDK
+   * works behind reverse proxies / on cloud hosts without configuration.
+   * Set this when the public URL differs from what `Host` reports
+   * (e.g. `https://api.example.com` proxied to an internal `:3000`).
+   */
+  proxyBase?: string;
+  /**
+   * When set, `/proxy` requires every `url` query param to be accompanied
+   * by an HMAC-SHA256 signature in `sig` (computed over `url` and `h`,
+   * keyed by this secret, hex-encoded). The proxy rewriter in this server
+   * automatically signs URLs it emits, so most callers don't need to do
+   * anything beyond setting this option. Unsigned/invalid-signature
+   * requests are rejected with 401.
+   */
+  proxySignSecret?: string;
+  /**
+   * Optional allowlist of upstream hostnames the `/proxy` endpoint is
+   * permitted to fetch. Each entry is matched as a *suffix* of the target
+   * URL's hostname, so `"wixstatic.com"` covers `static.wixstatic.com`
+   * and friends. When set, targets outside the list are rejected with 403
+   * — defends against SSRF (the proxy otherwise turns the server into an
+   * open HTTP relay). When omitted, all hosts are allowed.
+   */
+  proxyAllowedHosts?: string[];
+  /**
    * Optional read/write cache for provider responses. When set, `/search`,
-   * `/content`, `/stream`, and `/tracks` results are looked up by a stable
-   * key before invoking the provider. See {@link SdkCache} for the contract
-   * and the key namespacing used.
+   * `/content`, `/stream`, `/tracks`, and `/meta/*` results are looked up
+   * by a stable key before invoking the provider. See {@link SdkCache} for
+   * the contract and the key namespacing used.
    */
   cache?: SdkCache;
 }
@@ -50,6 +93,38 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
 
 function err(res: http.ServerResponse, status: number, message: string): void {
   json(res, status, { error: message });
+}
+
+function timingSafeEquals(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  try {
+    return nodeCrypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  } catch {
+    return false;
+  }
+}
+
+function computeProxySignature(
+  targetUrl: string,
+  hParam: string | undefined,
+  secret: string,
+): string {
+  const h = nodeCrypto.createHmac('sha256', secret);
+  h.update(targetUrl);
+  if (hParam) h.update('|h=' + hParam);
+  return h.digest('hex');
+}
+
+function buildProxyUrl(
+  proxyBase: string,
+  targetUrl: string,
+  hParam: string | undefined,
+  secret: string | undefined,
+): string {
+  const parts = [`url=${encodeURIComponent(targetUrl)}`];
+  if (hParam) parts.push(`h=${encodeURIComponent(hParam)}`);
+  if (secret) parts.push(`sig=${computeProxySignature(targetUrl, hParam, secret)}`);
+  return `${proxyBase}?${parts.join('&')}`;
 }
 
 /**
@@ -82,19 +157,22 @@ function rewriteHls(manifest: string, baseUrl: string, proxyBase: string, hParam
  * Rewrite video stream `sourceUrl` fields (and subtitle URLs) to route through
  * the proxy, with any required headers encoded in the `h` query param.
  */
-function proxyifyStream(stream: ResolvedMediaStream, proxyBase: string): ResolvedMediaStream {
+function proxyifyStream(
+  stream: ResolvedMediaStream,
+  proxyBase: string,
+  signSecret: string | undefined,
+): ResolvedMediaStream {
   if (stream.type === 'manga') {
     const hParam =
       stream.pages.headers && Object.keys(stream.pages.headers).length > 0
         ? Buffer.from(JSON.stringify(stream.pages.headers)).toString('base64')
         : undefined;
-    const suffix = hParam ? `&h=${encodeURIComponent(hParam)}` : '';
     return {
       type: 'manga',
       pages: {
         ...stream.pages,
-        imageUrls: stream.pages.imageUrls.map(
-          (url) => `${proxyBase}?url=${encodeURIComponent(url)}${suffix}`,
+        imageUrls: stream.pages.imageUrls.map((url) =>
+          buildProxyUrl(proxyBase, url, hParam, signSecret),
         ),
       },
     };
@@ -108,14 +186,13 @@ function proxyifyStream(stream: ResolvedMediaStream, proxyBase: string): Resolve
         s.headers && Object.keys(s.headers).length > 0
           ? Buffer.from(JSON.stringify(s.headers)).toString('base64')
           : undefined;
-      const suffix = hParam ? `&h=${encodeURIComponent(hParam)}` : '';
       const subtitles = s.subtitles?.map((t) => ({
         ...t,
-        url: proxifySubtitleUrl(proxyBase, t, { headers: s.headers }),
+        url: proxifySubtitleUrl(proxyBase, t, { headers: s.headers, signSecret }),
       }));
       return {
         ...s,
-        sourceUrl: `${proxyBase}?url=${encodeURIComponent(s.sourceUrl)}${suffix}`,
+        sourceUrl: buildProxyUrl(proxyBase, s.sourceUrl, hParam, signSecret),
         ...(subtitles ? { subtitles } : {}),
       };
     }),
@@ -123,19 +200,32 @@ function proxyifyStream(stream: ResolvedMediaStream, proxyBase: string): Resolve
 }
 
 /** Wrap the subtitle URLs returned by `fetchUnitTracks` through `/proxy`. */
-function proxyifyTracks(tracks: IUnitTracks, proxyBase: string): IUnitTracks {
+function proxyifyTracks(
+  tracks: IUnitTracks,
+  proxyBase: string,
+  signSecret: string | undefined,
+): IUnitTracks {
   return {
     ...tracks,
     subtitles: tracks.subtitles.map((t) => ({
       ...t,
-      url: proxifySubtitleUrl(proxyBase, t, { headers: tracks.headers }),
+      url: proxifySubtitleUrl(proxyBase, t, { headers: tracks.headers, signSecret }),
     })),
   };
 }
 
 export function startServer(options: ServerOptions): http.Server {
-  const { providers, port = 3000, auth, proxy = false, cache } = options;
-  const proxyBase = `http://localhost:${port}/proxy`;
+  const {
+    providers,
+    metaProviders = [],
+    port = 3000,
+    auth,
+    proxy = false,
+    cache,
+    proxyBase: configuredProxyBase,
+    proxySignSecret,
+    proxyAllowedHosts,
+  } = options;
 
   // Token → completed download, cleaned up after 10 minutes or on serve
   const pendingDownloads = new Map<
@@ -243,6 +333,13 @@ export function startServer(options: ServerOptions): http.Server {
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', `http://localhost`);
     const q = url.searchParams;
+    // Derive the public base from the configured override or the Host header
+    // so URLs the SDK rewrites are reachable from the same host the caller
+    // is using.
+    const hostHeader = req.headers.host ?? `localhost:${port}`;
+    const scheme =
+      (req.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim() ?? 'http';
+    const proxyBase = configuredProxyBase ?? `${scheme}://${hostHeader}/proxy`;
 
     if (req.method === 'OPTIONS') {
       res.writeHead(204, CORS);
@@ -258,8 +355,31 @@ export function startServer(options: ServerOptions): http.Server {
 
     if (req.method !== 'GET') return err(res, 405, 'Method not allowed');
 
+    // ── Discovery ────────────────────────────────────────────────────────
+    if (url.pathname === '/openapi.json') {
+      const spec = buildOpenApiSpec({
+        providerIds: providers.map((p) => p.id),
+        metaProviderIds: metaProviders.map((p) => p.id),
+        proxy,
+        proxyBase,
+      });
+      return json(res, 200, spec);
+    }
+
+    if (url.pathname === '/health') {
+      return json(res, 200, {
+        ok: true,
+        providers: providers.map((p) => p.id),
+        metaProviders: metaProviders.map((p) => p.id),
+        proxy,
+      });
+    }
+
     const findProvider = (id: string | null): BaseProvider | null =>
       id ? (providers.find((p) => p.id === id) ?? null) : null;
+
+    const findMetaProvider = (id: string | null): BaseMetadataProvider | null =>
+      id ? (metaProviders.find((p) => p.id === id) ?? null) : null;
 
     try {
       // ── Proxy ──────────────────────────────────────────────────────────
@@ -270,7 +390,29 @@ export function startServer(options: ServerOptions): http.Server {
         const targetUrl = q.get('url');
         if (!targetUrl) return err(res, 400, 'Missing param: url');
 
+        // SSRF guard
+        if (proxyAllowedHosts && proxyAllowedHosts.length > 0) {
+          let targetHost: string;
+          try {
+            targetHost = new URL(targetUrl).hostname;
+          } catch {
+            return err(res, 400, 'Invalid url');
+          }
+          const ok = proxyAllowedHosts.some(
+            (h) => targetHost === h || targetHost.endsWith(`.${h}`),
+          );
+          if (!ok) return err(res, 403, `Target host ${targetHost} not in allowlist`);
+        }
+
         const hParam = q.get('h');
+        if (proxySignSecret) {
+          const sig = q.get('sig');
+          if (!sig) return err(res, 401, 'Missing required `sig` query parameter');
+          const expected = computeProxySignature(targetUrl, hParam ?? undefined, proxySignSecret);
+          if (!timingSafeEquals(sig, expected)) {
+            return err(res, 401, 'Invalid proxy signature');
+          }
+        }
         const upstreamHeaders: Record<string, string> = {
           Accept: '*/*',
           'User-Agent':
@@ -422,7 +564,7 @@ export function startServer(options: ServerOptions): http.Server {
         let stream = await cached(`stream:${provider.id}:${unitId}:${language ?? ''}`, () =>
           provider.resolveStream(unitId, language ?? undefined),
         );
-        if (proxy) stream = proxyifyStream(stream, proxyBase);
+        if (proxy) stream = proxyifyStream(stream, proxyBase, proxySignSecret);
         return json(res, 200, stream);
       }
 
@@ -445,7 +587,7 @@ export function startServer(options: ServerOptions): http.Server {
         let tracks = await cached(`tracks:${provider.id}:${unitId}:${language ?? ''}`, () =>
           provider.fetchUnitTracks!(unitId, language ?? undefined),
         );
-        if (proxy) tracks = proxyifyTracks(tracks, proxyBase);
+        if (proxy) tracks = proxyifyTracks(tracks, proxyBase, proxySignSecret);
         return json(res, 200, tracks);
       }
 
@@ -756,6 +898,117 @@ export function startServer(options: ServerOptions): http.Server {
         return;
       }
 
+      // ── Metadata layer ───────────────────────────────────────────────
+      // Routes:
+      //   /meta/search   ?provider=anilist&q=<query>
+      //   /meta/info     ?provider=anilist&id=<metaUrn>
+      //   /meta/content  ?provider=anilist&id=<metaUrn>&contentProvider=<id>
+      //   /meta/stream   ?provider=anilist&id=<metaUrn>&episode=<n>&contentProvider=<id>[&language=]
+      //   /meta/tracks   ?provider=anilist&id=<metaUrn>&episode=<n>&contentProvider=<id>[&language=]
+      //   /meta/browse   ?provider=anilist&kind=trending|popular|seasonal|top[&catalogType=&page=&perPage=&season=&year=&format=]
+      if (url.pathname.startsWith('/meta/')) {
+        const meta = findMetaProvider(q.get('provider'));
+        if (!meta) return err(res, 400, 'Missing or unknown param: provider');
+
+        if (url.pathname === '/meta/search') {
+          const query = q.get('q');
+          if (!query) return err(res, 400, 'Missing param: q');
+          const items = await cached(`meta:search:${meta.id}:${query}`, () => meta.search(query));
+          return json(res, 200, items);
+        }
+
+        if (url.pathname === '/meta/info') {
+          const id = q.get('id');
+          if (!id) return err(res, 400, 'Missing param: id');
+          try {
+            strictUnwrapUrn(meta.id, id);
+          } catch (e) {
+            return err(res, 400, e instanceof Error ? e.message : String(e));
+          }
+          const info = await cached(`meta:info:${meta.id}:${id}`, () => meta.fetchMediaInfo(id));
+          return json(res, 200, info);
+        }
+
+        const contentProvider = findProvider(q.get('contentProvider'));
+
+        if (url.pathname === '/meta/content') {
+          const id = q.get('id');
+          if (!id) return err(res, 400, 'Missing param: id');
+          if (!contentProvider) return err(res, 400, 'Missing or unknown param: contentProvider');
+          const units = await cached(`meta:content:${meta.id}:${id}:${contentProvider.id}`, () =>
+            meta.fetchContentUnits(id, contentProvider),
+          );
+          return json(res, 200, units);
+        }
+
+        if (url.pathname === '/meta/stream') {
+          const id = q.get('id');
+          const episode = q.get('episode');
+          const language = q.get('language') as ContentLanguage | null;
+          if (!id) return err(res, 400, 'Missing param: id');
+          if (!episode) return err(res, 400, 'Missing param: episode');
+          if (!contentProvider) return err(res, 400, 'Missing or unknown param: contentProvider');
+          const epNum = parseFloat(episode);
+          if (!Number.isFinite(epNum)) return err(res, 400, 'Param `episode` must be numeric');
+          let stream = await cached(
+            `meta:stream:${meta.id}:${id}:${contentProvider.id}:${epNum}:${language ?? ''}`,
+            () => meta.resolveStream(id, epNum, contentProvider, language ?? undefined),
+          );
+          if (proxy) stream = proxyifyStream(stream, proxyBase, proxySignSecret);
+          return json(res, 200, stream);
+        }
+
+        if (url.pathname === '/meta/tracks') {
+          const id = q.get('id');
+          const episode = q.get('episode');
+          const language = q.get('language') as ContentLanguage | null;
+          if (!id) return err(res, 400, 'Missing param: id');
+          if (!episode) return err(res, 400, 'Missing param: episode');
+          if (!contentProvider) return err(res, 400, 'Missing or unknown param: contentProvider');
+          if (!contentProvider.supportsUnitTracks) {
+            return err(res, 501, `Provider "${contentProvider.id}" does not expose track metadata`);
+          }
+          const epNum = parseFloat(episode);
+          if (!Number.isFinite(epNum)) return err(res, 400, 'Param `episode` must be numeric');
+          let tracks = await cached(
+            `meta:tracks:${meta.id}:${id}:${contentProvider.id}:${epNum}:${language ?? ''}`,
+            () => meta.fetchUnitTracks(id, epNum, contentProvider, language ?? undefined),
+          );
+          if (proxy) tracks = proxyifyTracks(tracks, proxyBase, proxySignSecret);
+          return json(res, 200, tracks);
+        }
+
+        if (url.pathname === '/meta/browse') {
+          const kind = q.get('kind') as BrowseKind | null;
+          if (!kind || !['trending', 'popular', 'seasonal', 'top'].includes(kind)) {
+            return err(res, 400, 'Param `kind` must be one of: trending, popular, seasonal, top');
+          }
+          if (!meta.supportsBrowseKind(kind)) {
+            return err(res, 501, `Provider "${meta.id}" does not support browse('${kind}')`);
+          }
+          const catalogType = (q.get('catalogType') as MediaCatalogType | null) ?? 'ANIME';
+          const page = q.get('page') ? Math.max(1, parseInt(q.get('page')!, 10) || 1) : 1;
+          const perPage = q.get('perPage') ? parseInt(q.get('perPage')!, 10) : undefined;
+          const season = q.get('season') as MediaSeason | null;
+          const year = q.get('year') ? parseInt(q.get('year')!, 10) : undefined;
+          const format = q.get('format') as MediaFormat | null;
+          const cacheKey = `meta:browse:${meta.id}:${kind}:${catalogType}:${page}:${perPage ?? ''}:${season ?? ''}:${year ?? ''}:${format ?? ''}`;
+          const items = await cached(cacheKey, () =>
+            meta.browse(kind, {
+              catalogType,
+              page,
+              perPage,
+              season: season ?? undefined,
+              year,
+              format: format ?? undefined,
+            }),
+          );
+          return json(res, 200, items);
+        }
+
+        return err(res, 404, 'Not found');
+      }
+
       return err(res, 404, 'Not found');
     } catch (e) {
       console.log(e);
@@ -765,4 +1018,283 @@ export function startServer(options: ServerOptions): http.Server {
 
   server.listen(port, () => console.log(`anime-sdk server listening on http://localhost:${port}`));
   return server;
+}
+
+/**
+ * Build a minimal OpenAPI 3.1 spec describing every route the server
+ * exposes. Returned as a JSON object; the server serves it under
+ * `/openapi.json`. Tools like Swagger UI / Redoc can consume it directly.
+ */
+function buildOpenApiSpec(args: {
+  providerIds: string[];
+  metaProviderIds: string[];
+  proxy: boolean;
+  proxyBase: string;
+}): Record<string, unknown> {
+  const providerEnum = args.providerIds.length > 0 ? args.providerIds : ['<none>'];
+  const metaEnum = args.metaProviderIds.length > 0 ? args.metaProviderIds : ['<none>'];
+  const paths: Record<string, unknown> = {
+    '/search': {
+      get: {
+        summary: 'Search a content provider for a title',
+        parameters: [
+          { name: 'q', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: providerEnum },
+          },
+        ],
+        responses: { '200': { description: 'IMediaSearchResult[]' } },
+      },
+    },
+    '/content': {
+      get: {
+        summary: 'List episodes/chapters for a media URN',
+        parameters: [
+          { name: 'mediaId', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: providerEnum },
+          },
+        ],
+        responses: { '200': { description: 'IContentUnit[]' } },
+      },
+    },
+    '/stream': {
+      get: {
+        summary: 'Resolve a playable stream for a unit URN',
+        parameters: [
+          { name: 'unitId', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: providerEnum },
+          },
+          {
+            name: 'language',
+            in: 'query',
+            schema: { type: 'string', enum: ['sub', 'dub', 'raw'] },
+          },
+        ],
+        responses: { '200': { description: 'ResolvedMediaStream' } },
+      },
+    },
+    '/tracks': {
+      get: {
+        summary: 'Cheap-path: subtitles/qualities without resolving a stream',
+        parameters: [
+          { name: 'unitId', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: providerEnum },
+          },
+          {
+            name: 'language',
+            in: 'query',
+            schema: { type: 'string', enum: ['sub', 'dub', 'raw'] },
+          },
+        ],
+        responses: {
+          '200': { description: 'IUnitTracks' },
+          '501': { description: 'Provider does not expose tracks' },
+        },
+      },
+    },
+    '/health': {
+      get: { summary: 'Health + capability check', responses: { '200': { description: 'OK' } } },
+    },
+  };
+  if (args.metaProviderIds.length > 0) {
+    paths['/meta/search'] = {
+      get: {
+        summary: 'Search a metadata catalogue (AniList/MAL/Kitsu)',
+        parameters: [
+          { name: 'q', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: metaEnum },
+          },
+        ],
+        responses: { '200': { description: 'IMetaSearchResult[]' } },
+      },
+    };
+    paths['/meta/info'] = {
+      get: {
+        summary: 'Full metadata for a meta URN (e.g. `anilist:21`)',
+        parameters: [
+          { name: 'id', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: metaEnum },
+          },
+        ],
+        responses: { '200': { description: 'IMediaMetadata' } },
+      },
+    };
+    paths['/meta/content'] = {
+      get: {
+        summary: 'Episode list for a meta URN, resolved via a content provider',
+        parameters: [
+          { name: 'id', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: metaEnum },
+          },
+          {
+            name: 'contentProvider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: providerEnum },
+          },
+        ],
+        responses: { '200': { description: 'IContentUnit[]' } },
+      },
+    };
+    paths['/meta/stream'] = {
+      get: {
+        summary: 'Resolve a stream by episode number on a content provider',
+        parameters: [
+          { name: 'id', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'episode', in: 'query', required: true, schema: { type: 'number' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: metaEnum },
+          },
+          {
+            name: 'contentProvider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: providerEnum },
+          },
+          {
+            name: 'language',
+            in: 'query',
+            schema: { type: 'string', enum: ['sub', 'dub', 'raw'] },
+          },
+        ],
+        responses: { '200': { description: 'ResolvedMediaStream' } },
+      },
+    };
+    paths['/meta/tracks'] = {
+      get: {
+        summary: 'Cheap-path: tracks for an episode, by meta URN + content provider',
+        parameters: [
+          { name: 'id', in: 'query', required: true, schema: { type: 'string' } },
+          { name: 'episode', in: 'query', required: true, schema: { type: 'number' } },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: metaEnum },
+          },
+          {
+            name: 'contentProvider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: providerEnum },
+          },
+          {
+            name: 'language',
+            in: 'query',
+            schema: { type: 'string', enum: ['sub', 'dub', 'raw'] },
+          },
+        ],
+        responses: {
+          '200': { description: 'IUnitTracks' },
+          '501': { description: 'Provider does not expose tracks' },
+        },
+      },
+    };
+    paths['/meta/browse'] = {
+      get: {
+        summary: 'Browse the catalogue (trending/popular/seasonal/top)',
+        parameters: [
+          {
+            name: 'kind',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: ['trending', 'popular', 'seasonal', 'top'] },
+          },
+          {
+            name: 'provider',
+            in: 'query',
+            required: true,
+            schema: { type: 'string', enum: metaEnum },
+          },
+          {
+            name: 'catalogType',
+            in: 'query',
+            schema: { type: 'string', enum: ['ANIME', 'MANGA'] },
+          },
+          { name: 'page', in: 'query', schema: { type: 'integer', minimum: 1 } },
+          { name: 'perPage', in: 'query', schema: { type: 'integer', minimum: 1, maximum: 50 } },
+          {
+            name: 'season',
+            in: 'query',
+            schema: { type: 'string', enum: ['WINTER', 'SPRING', 'SUMMER', 'FALL'] },
+          },
+          { name: 'year', in: 'query', schema: { type: 'integer' } },
+          { name: 'format', in: 'query', schema: { type: 'string' } },
+        ],
+        responses: {
+          '200': { description: 'IMetaSearchResult[]' },
+          '501': { description: 'Browse kind not supported' },
+        },
+      },
+    };
+  }
+  if (args.proxy) {
+    paths['/proxy'] = {
+      get: {
+        summary: 'CORS-friendly upstream proxy for stream/subtitle URLs',
+        parameters: [
+          { name: 'url', in: 'query', required: true, schema: { type: 'string' } },
+          {
+            name: 'h',
+            in: 'query',
+            schema: { type: 'string', description: 'base64-JSON headers' },
+          },
+          {
+            name: 'ct',
+            in: 'query',
+            schema: { type: 'string', description: 'Content-Type override' },
+          },
+          {
+            name: 'sig',
+            in: 'query',
+            schema: {
+              type: 'string',
+              description: 'HMAC signature (required when proxySignSecret is configured)',
+            },
+          },
+        ],
+        responses: {
+          '200': { description: 'Streamed upstream body' },
+          '401': { description: 'Bad/missing signature' },
+          '403': { description: 'Host not in allowlist' },
+        },
+      },
+    };
+  }
+  return {
+    openapi: '3.1.0',
+    info: { title: 'anime-sdk', version: '1.0.1', description: 'Universal media SDK server' },
+    servers: [{ url: args.proxyBase.replace(/\/proxy$/, '') }],
+    paths,
+  };
 }

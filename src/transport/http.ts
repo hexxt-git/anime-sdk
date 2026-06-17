@@ -1,9 +1,50 @@
+import {
+  DEFAULT_RATE_LIMITS,
+  PerHostRateLimits,
+  RateLimitConfig,
+  RateLimiter,
+} from './rateLimiter.js';
+import {
+  DEFAULT_RETRY_STATUSES,
+  HttpRetryableError,
+  RetryConfig,
+  parseRetryAfter,
+  withRetry,
+} from './retry.js';
+import { CurlFallbackTransport, HttpTransport } from './transport.js';
+
 export interface HttpClientConfig {
   proxyUrl?: string;
   proxyType?: 'prepend' | 'query';
   proxyQueryParam?: string;
   defaultHeaders?: Record<string, string>;
   timeoutMs?: number;
+  /**
+   * Per-host token-bucket rate limits. Merged on top of
+   * {@link DEFAULT_RATE_LIMITS}, which covers AniList / Jikan / Kitsu /
+   * MALSync / Anify / arm-server with their published quotas. Pass an
+   * empty object to start blank.
+   */
+  rateLimits?: PerHostRateLimits;
+  /** Optional default policy for hosts not in the per-host map. */
+  defaultRateLimit?: RateLimitConfig;
+  /** Disable rate limiting entirely (e.g. in tests). */
+  disableRateLimit?: boolean;
+  /**
+   * Retry policy. Defaults to 3 attempts with exponential backoff (250ms
+   * base) on 408/425/429/5xx and transient network errors. Honours
+   * `Retry-After`.
+   */
+  retry?: RetryConfig | false;
+  /**
+   * Pluggable transport. Defaults to {@link CurlFallbackTransport} on
+   * Node (fetch + curl fallback) and degrades to a plain `fetch` on
+   * runtimes that don't expose `child_process`. Pass a {@link FetchTransport}
+   * to disable the curl fallback explicitly, or any custom
+   * {@link HttpTransport} for full control (e.g. an Undici dispatcher,
+   * a Cloudflare-bypass proxy, or an in-process test transport).
+   */
+  transport?: HttpTransport;
 }
 
 export class HttpClient {
@@ -12,6 +53,9 @@ export class HttpClient {
   private proxyQueryParam: string;
   private defaultHeaders: Record<string, string>;
   private timeoutMs: number;
+  private rateLimiter?: RateLimiter;
+  private retryConfig: RetryConfig | false;
+  private transport: HttpTransport;
 
   constructor(config: HttpClientConfig = {}) {
     this.proxyUrl = config.proxyUrl;
@@ -19,6 +63,23 @@ export class HttpClient {
     this.proxyQueryParam = config.proxyQueryParam || 'url';
     this.defaultHeaders = config.defaultHeaders || {};
     this.timeoutMs = config.timeoutMs || 10000;
+    if (!config.disableRateLimit) {
+      this.rateLimiter = new RateLimiter(
+        { ...DEFAULT_RATE_LIMITS, ...(config.rateLimits ?? {}) },
+        config.defaultRateLimit,
+      );
+    }
+    this.retryConfig = config.retry === false ? false : (config.retry ?? {});
+    this.transport = config.transport ?? new CurlFallbackTransport({ timeoutMs: this.timeoutMs });
+  }
+
+  /** Live rate-limiter; useful for tests and observability. May be undefined when disabled. */
+  public getRateLimiter(): RateLimiter | undefined {
+    return this.rateLimiter;
+  }
+
+  public getTransport(): HttpTransport {
+    return this.transport;
   }
 
   public getProxyUrl(): string | undefined {
@@ -51,9 +112,38 @@ export class HttpClient {
     }
   }
 
-  private cookieFile?: string;
-
   public async request(url: string, options: RequestInit = {}): Promise<Response> {
+    const signal = options.signal as AbortSignal | null | undefined;
+    const host = safeHostname(this.requestUrl(url));
+
+    if (this.retryConfig === false) {
+      if (this.rateLimiter && host) await this.rateLimiter.acquire(host, signal ?? undefined);
+      return this.requestOnce(url, options);
+    }
+    return withRetry(
+      async () => {
+        // Re-acquire on every attempt — each fetch is a billable upstream
+        // call and must respect the per-host budget independently. Doing
+        // this outside the retry loop would let a noisy retry-storm
+        // silently blow past the configured rate limit.
+        if (this.rateLimiter && host) await this.rateLimiter.acquire(host, signal ?? undefined);
+        const res = await this.requestOnce(url, options);
+        const retryStatuses =
+          this.retryConfig === false
+            ? DEFAULT_RETRY_STATUSES
+            : (this.retryConfig.retryStatuses ?? DEFAULT_RETRY_STATUSES);
+        if (retryStatuses.includes(res.status)) {
+          const ra = parseRetryAfter(res.headers.get('retry-after'));
+          throw new HttpRetryableError(res.status, ra);
+        }
+        return res;
+      },
+      this.retryConfig,
+      signal ?? undefined,
+    );
+  }
+
+  private async requestOnce(url: string, options: RequestInit = {}): Promise<Response> {
     const targetUrl = this.requestUrl(url);
     const headers: Record<string, string> = { ...this.defaultHeaders };
     if (options.headers) {
@@ -70,143 +160,35 @@ export class HttpClient {
       }
     }
 
+    // Compose the timeout signal with the caller's signal (if any) so a
+    // caller-supplied AbortSignal still cancels the in-flight request.
+    const callerSignal = options.signal as AbortSignal | null | undefined;
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), this.timeoutMs);
+    const id = setTimeout(() => controller.abort(new Error('Request timed out')), this.timeoutMs);
+    let onCallerAbort: (() => void) | undefined;
+    if (callerSignal) {
+      if (callerSignal.aborted) {
+        clearTimeout(id);
+        throw abortReason(callerSignal);
+      }
+      onCallerAbort = () => controller.abort(callerSignal.reason);
+      callerSignal.addEventListener('abort', onCallerAbort, { once: true });
+    }
+    const cleanup = () => {
+      clearTimeout(id);
+      if (onCallerAbort) callerSignal!.removeEventListener('abort', onCallerAbort);
+    };
 
     try {
-      const res = await fetch(targetUrl, { ...options, headers, signal: controller.signal });
-      clearTimeout(id);
+      const res = await this.transport.fetch(targetUrl, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+      cleanup();
       return res;
-    } catch (err: any) {
-      clearTimeout(id);
-
-      // If the user explicitly aborted the request, propagate the error immediately
-      if (options.signal?.aborted || (err.name === 'AbortError' && options.signal)) {
-        throw err;
-      }
-
-      // If we are in Node.js and the request failed or timed out, try falling back to curl
-      if (typeof process !== 'undefined' && process.versions?.node) {
-        try {
-          const cp = await import('child_process');
-          const execSync = cp.execSync;
-
-          if (!this.cookieFile) {
-            try {
-              const os = await import('os');
-              const path = await import('path');
-              this.cookieFile = path.join(
-                os.tmpdir(),
-                `anime-sdk-cookie-${Math.random().toString(36).substring(2)}.txt`,
-              );
-            } catch (e) {
-              this.cookieFile = `/tmp/anime-sdk-cookie-${Math.random().toString(36).substring(2)}.txt`;
-            }
-          }
-
-          const method = options.method || 'GET';
-          let headerArgs = '';
-          for (const [key, val] of Object.entries(headers)) {
-            headerArgs += ` -H ${JSON.stringify(`${key}: ${val}`)}`;
-          }
-
-          if (options.body instanceof URLSearchParams) {
-            if (!headers['Content-Type']) {
-              headers['Content-Type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
-            }
-          }
-
-          let bodyArg = '';
-          if (options.body) {
-            let bodyStr = '';
-            if (typeof options.body === 'string') {
-              bodyStr = options.body;
-            } else if (options.body instanceof URLSearchParams) {
-              bodyStr = options.body.toString();
-            } else {
-              bodyStr = JSON.stringify(options.body);
-            }
-            bodyArg = ` -d ${JSON.stringify(bodyStr)}`;
-          }
-
-          let methodArg = '';
-          if (method !== 'GET' && method !== 'POST') {
-            methodArg = ` -X ${method}`;
-          }
-
-          const cookieArg = ` -c ${JSON.stringify(this.cookieFile)} -b ${JSON.stringify(this.cookieFile)}`;
-
-          // Use -i to include headers, -L to follow redirects, -s for silent, --max-time to prevent hangs
-          const curlCmd = `curl -sL --max-time ${Math.ceil(this.timeoutMs / 1000)}${methodArg}${headerArgs}${bodyArg}${cookieArg} -i ${JSON.stringify(targetUrl)}`;
-          const output = execSync(curlCmd, { maxBuffer: 10 * 1024 * 1024 });
-          const outputStr = output.toString('binary');
-
-          const parts = outputStr.split('\r\n\r\n');
-          // Find the last HTTP header section
-          let headerSection = '';
-          let body = '';
-          for (let i = 0; i < parts.length; i++) {
-            const part = parts[i];
-            if (part.startsWith('HTTP/')) {
-              headerSection = part;
-              body = parts.slice(i + 1).join('\r\n\r\n');
-            }
-          }
-
-          const headerLines = headerSection.split('\r\n');
-          const statusLine = headerLines[0];
-          const statusMatch = statusLine.match(/HTTP\/\d+(\.\d+)?\s+(\d+)/);
-          const status = statusMatch ? parseInt(statusMatch[2], 10) : 200;
-
-          const responseHeaders = new Headers();
-          for (let i = 1; i < headerLines.length; i++) {
-            const line = headerLines[i];
-            const colonIdx = line.indexOf(':');
-            if (colonIdx !== -1) {
-              const key = line.substring(0, colonIdx).trim();
-              const val = line.substring(colonIdx + 1).trim();
-              responseHeaders.append(key, val);
-            }
-          }
-
-          let finalUrl = targetUrl;
-          for (const part of parts) {
-            const lines = part.split('\r\n');
-            if (lines[0].startsWith('HTTP/')) {
-              for (const line of lines) {
-                const colonIdx = line.indexOf(':');
-                if (colonIdx !== -1) {
-                  const key = line.substring(0, colonIdx).trim().toLowerCase();
-                  const val = line.substring(colonIdx + 1).trim();
-                  if (key === 'location') {
-                    try {
-                      finalUrl = val.startsWith('http') ? val : new URL(val, finalUrl).toString();
-                    } catch (e) {
-                      // fallback
-                    }
-                  }
-                }
-              }
-            }
-          }
-
-          return {
-            status,
-            statusText: 'OK',
-            ok: status >= 200 && status < 300,
-            headers: responseHeaders,
-            url: finalUrl,
-            text: async () => body,
-            json: async () => JSON.parse(body),
-            arrayBuffer: async () => {
-              const buf = Buffer.from(body, 'binary');
-              return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-            },
-          } as unknown as Response;
-        } catch (curlErr: any) {
-          throw err;
-        }
-      }
+    } catch (err) {
+      cleanup();
       throw err;
     }
   }
@@ -256,4 +238,24 @@ export class HttpClient {
   public setUserAgent(userAgent: string): void {
     this.defaultHeaders['User-Agent'] = userAgent;
   }
+}
+
+/**
+ * Extract the hostname from a URL for rate-limiter bucketing. Returns
+ * `undefined` if the URL is relative or unparseable — those calls aren't
+ * rate-limited.
+ */
+function safeHostname(url: string): string | undefined {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const e = new Error(typeof signal.reason === 'string' ? signal.reason : 'Aborted');
+  e.name = 'AbortError';
+  return e;
 }

@@ -1,4 +1,4 @@
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 import { HttpClient } from '../transport/http.js';
 import { DomRegistry } from '../transport/dom.js';
 import { BloggerExtractor } from '../extractors/BloggerExtractor.js';
@@ -37,12 +37,15 @@ export class GoyabuProvider extends BaseProvider {
    * Search for anime on Goyabu.
    * Leverages the HTML search fallback method.
    */
-  public async search(query: string): Promise<IMediaSearchResult[]> {
+  protected async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     // Replace spaces, hyphens and underscores with plus for search query formatting
     const normalized = query.trim().replace(/[-_]/g, ' ');
     const searchUrl = `${this.baseUrl}/?s=${encodeURIComponent(normalized)}`;
 
-    const response = await this.http.get(searchUrl);
+    const response = await this.http.get(searchUrl, { signal: options.signal });
     if (response.status !== 200) {
       throw new Error(`Goyabu search failed with status ${response.status}`);
     }
@@ -98,9 +101,12 @@ export class GoyabuProvider extends BaseProvider {
   /**
    * Fetch all content units (episodes) for a given Goyabu anime URL slug (e.g. "/anime/...").
    */
-  public async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
+  protected async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
     const fullUrl = `${this.baseUrl}${mediaId.startsWith('/') ? '' : '/'}${mediaId}`;
-    const response = await this.http.get(fullUrl);
+    const response = await this.http.get(fullUrl, { signal: options.signal });
     if (response.status !== 200) {
       throw new Error(`Failed to fetch Goyabu details page: ${response.status}`);
     }
@@ -192,12 +198,13 @@ export class GoyabuProvider extends BaseProvider {
    * call Google's batchexecute API and get back the actual googlevideo.com
    * URLs.
    */
-  public async resolveStream(
+  protected async resolveStreamRaw(
     unitId: string,
     _language?: import('../types/index.js').ContentLanguage,
+    options: CallOptions = {},
   ): Promise<ResolvedMediaStream> {
     const fullUrl = `${this.baseUrl}${unitId.startsWith('/') ? '' : '/'}${unitId}`;
-    const response = await this.http.get(fullUrl);
+    const response = await this.http.get(fullUrl, { signal: options.signal });
     if (response.status !== 200) {
       throw new Error(`Failed to fetch Goyabu episode page: ${response.status}`);
     }

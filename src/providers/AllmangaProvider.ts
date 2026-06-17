@@ -1,4 +1,4 @@
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 import { HttpClient } from '../transport/http.js';
 import { aesDecryptCtr } from '../utils/crypto.js';
 import { Mp4UploadExtractor } from '../extractors/Mp4UploadExtractor.js';
@@ -63,7 +63,10 @@ export class AllmangaProvider extends BaseProvider {
 
   // ─── Search ────────────────────────────────────────────────────────────────
 
-  public async search(query: string): Promise<IMediaSearchResult[]> {
+  protected async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     const searchGql = `query($search: SearchInput, $limit: Int, $page: Int, $countryOrigin: VaildCountryOriginEnumType) {
       shows(search: $search, limit: $limit, page: $page, countryOrigin: $countryOrigin) {
         edges { _id name englishName availableEpisodes __typename }
@@ -80,7 +83,7 @@ export class AllmangaProvider extends BaseProvider {
     const res = await this.http.post(
       this.apiBase,
       { variables, query: searchGql },
-      { headers: this.apiHeaders() },
+      { headers: this.apiHeaders(), signal: options.signal },
     );
 
     if (res.status !== 200) {
@@ -112,13 +115,16 @@ export class AllmangaProvider extends BaseProvider {
 
   // ─── Episodes ──────────────────────────────────────────────────────────────
 
-  public async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
+  protected async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
     const gql = `query ($showId: String!) { show( _id: $showId ) { _id availableEpisodesDetail }}`;
 
     const res = await this.http.post(
       this.apiBase,
       { variables: { showId: mediaId }, query: gql },
-      { headers: this.apiHeaders() },
+      { headers: this.apiHeaders(), signal: options.signal },
     );
     if (res.status !== 200) {
       throw new Error(`Failed to fetch AllManga episodes: ${res.status}`);
@@ -155,9 +161,10 @@ export class AllmangaProvider extends BaseProvider {
 
   // ─── Streams ───────────────────────────────────────────────────────────────
 
-  public async resolveStream(
+  protected async resolveStreamRaw(
     unitId: string,
     language?: ContentLanguage,
+    options: CallOptions = {},
   ): Promise<ResolvedMediaStream> {
     // Accept both the new `${showId}/${episodeString}` shape and the legacy
     // `${showId}/${episodeString}/${lang}` shape so older client links keep
@@ -168,7 +175,7 @@ export class AllmangaProvider extends BaseProvider {
     }
     const lang = language ?? (legacyLang as ContentLanguage | undefined) ?? this.defaultLanguage;
 
-    const sources = await this.fetchEpisodeSources(showId, episodeString, lang);
+    const sources = await this.fetchEpisodeSources(showId, episodeString, lang, options.signal);
     if (sources.length === 0) {
       throw new Error(`AllManga returned no source URLs for ${unitId} (lang=${lang})`);
     }
@@ -216,6 +223,7 @@ export class AllmangaProvider extends BaseProvider {
     showId: string,
     episodeString: string,
     lang: ContentLanguage,
+    signal?: AbortSignal,
   ): Promise<Array<{ sourceUrl: string; sourceName?: string; priority?: number }>> {
     const variables = { showId, translationType: lang, episodeString };
     const extensions = {
@@ -229,7 +237,7 @@ export class AllmangaProvider extends BaseProvider {
       JSON.stringify(variables),
     )}&extensions=${encodeURIComponent(JSON.stringify(extensions))}`;
 
-    const res = await this.http.get(url, { headers: this.apiHeaders() });
+    const res = await this.http.get(url, { headers: this.apiHeaders(), signal });
     if (res.status !== 200) {
       throw new Error(`Failed to load AllManga stream sources: ${res.status}`);
     }
@@ -245,7 +253,7 @@ export class AllmangaProvider extends BaseProvider {
     const fbRes = await this.http.post(
       this.apiBase,
       { variables, query: fallbackQuery },
-      { headers: this.apiHeaders() },
+      { headers: this.apiHeaders(), signal },
     );
     if (fbRes.status !== 200) {
       throw new Error(`AllManga fallback GraphQL failed with status ${fbRes.status}`);

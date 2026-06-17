@@ -7,11 +7,12 @@ import {
   MediaCatalogType,
   ContentLanguage,
 } from '../types/index.js';
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 
 export class MangapillProvider extends BaseProvider {
   readonly id = 'mangapill';
   readonly supportedTypes: MediaCatalogType[] = ['MANGA'];
+  public static override readonly malsyncSites = ['Mangapill'] as const;
 
   private readonly baseUrl = 'https://mangapill.com';
 
@@ -19,10 +20,14 @@ export class MangapillProvider extends BaseProvider {
     super(http);
   }
 
-  async search(query: string): Promise<IMediaSearchResult[]> {
+  protected async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     const url = `${this.baseUrl}/search?q=${encodeURIComponent(query)}`;
 
     const res = await this.http.get(url, {
+      signal: options.signal,
       headers: {
         Referer: this.baseUrl,
         'User-Agent':
@@ -64,9 +69,13 @@ export class MangapillProvider extends BaseProvider {
     return results;
   }
 
-  async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
+  protected async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
     const url = `${this.baseUrl}/${mediaId}`;
     const res = await this.http.get(url, {
+      signal: options.signal,
       headers: {
         Referer: this.baseUrl,
         'User-Agent':
@@ -104,9 +113,14 @@ export class MangapillProvider extends BaseProvider {
     return units.reverse();
   }
 
-  async resolveStream(unitId: string, language?: ContentLanguage): Promise<ResolvedMediaStream> {
+  protected async resolveStreamRaw(
+    unitId: string,
+    language?: ContentLanguage,
+    options: CallOptions = {},
+  ): Promise<ResolvedMediaStream> {
     const url = `${this.baseUrl}/${unitId}`;
     const res = await this.http.get(url, {
+      signal: options.signal,
       headers: {
         Referer: this.baseUrl,
         'User-Agent':

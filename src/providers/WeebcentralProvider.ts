@@ -7,11 +7,12 @@ import {
   MediaCatalogType,
   ContentLanguage,
 } from '../types/index.js';
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 
 export class WeebcentralProvider extends BaseProvider {
   readonly id = 'weebcentral';
   readonly supportedTypes: MediaCatalogType[] = ['MANGA'];
+  public static override readonly malsyncSites = ['Weebcentral', 'WeebCentral'] as const;
 
   private readonly baseUrl = 'https://weebcentral.com/';
 
@@ -19,12 +20,16 @@ export class WeebcentralProvider extends BaseProvider {
     super(http);
   }
 
-  async search(query: string): Promise<IMediaSearchResult[]> {
+  protected async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     const url = `${this.baseUrl}search/data?text=${encodeURIComponent(
       query,
     )}&limit=24&offset=0&sort=Best+Match&order=Descending&official=Any&anime=Any&adult=Any&display_mode=Full+Display`;
 
     const res = await this.http.get(url, {
+      signal: options.signal,
       headers: {
         Referer: 'https://google.com',
         Accept:
@@ -69,9 +74,13 @@ export class WeebcentralProvider extends BaseProvider {
     return results;
   }
 
-  async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
+  protected async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
     const url = `${this.baseUrl}series/${mediaId}/full-chapter-list`;
     const res = await this.http.get(url, {
+      signal: options.signal,
       headers: {
         Referer: 'https://google.com',
         'User-Agent':
@@ -119,9 +128,14 @@ export class WeebcentralProvider extends BaseProvider {
     return units.reverse();
   }
 
-  async resolveStream(unitId: string, language?: ContentLanguage): Promise<ResolvedMediaStream> {
+  protected async resolveStreamRaw(
+    unitId: string,
+    language?: ContentLanguage,
+    options: CallOptions = {},
+  ): Promise<ResolvedMediaStream> {
     const url = `${this.baseUrl}chapters/${unitId}/images?is_prev=False&current_page=1&reading_style=long_strip`;
     const res = await this.http.get(url, {
+      signal: options.signal,
       headers: {
         Referer: 'https://google.com',
         'User-Agent':

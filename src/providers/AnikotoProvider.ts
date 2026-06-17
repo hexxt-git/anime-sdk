@@ -1,4 +1,4 @@
-import { BaseProvider } from './BaseProvider.js';
+import { BaseProvider, CallOptions } from './BaseProvider.js';
 import { HttpClient } from '../transport/http.js';
 import { DomRegistry } from '../transport/dom.js';
 import {
@@ -28,9 +28,13 @@ export class AnikotoProvider extends BaseProvider {
     }
   }
 
-  public override async search(query: string): Promise<IMediaSearchResult[]> {
+  protected override async searchRaw(
+    query: string,
+    options: CallOptions = {},
+  ): Promise<IMediaSearchResult[]> {
     const response = await this.http.get(
       `${this.baseUrl}/filter?keyword=${encodeURIComponent(query)}`,
+      { signal: options.signal },
     );
     const html = await response.text();
     const dom = DomRegistry.parse(html);
@@ -55,8 +59,13 @@ export class AnikotoProvider extends BaseProvider {
       .filter((res) => res.id !== '');
   }
 
-  public override async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
-    const response = await this.http.get(`${this.apiUrl}/series/${mediaId}`);
+  protected override async fetchContentUnitsRaw(
+    mediaId: string,
+    options: CallOptions = {},
+  ): Promise<IContentUnit[]> {
+    const response = await this.http.get(`${this.apiUrl}/series/${mediaId}`, {
+      signal: options.signal,
+    });
     const json = (await response.json()) as any;
 
     if (!json.ok || !json.data || !json.data.episodes) {
@@ -79,14 +88,16 @@ export class AnikotoProvider extends BaseProvider {
     });
   }
 
-  public override async resolveStream(
+  protected override async resolveStreamRaw(
     unitId: string,
     language: ContentLanguage = 'sub',
+    options: CallOptions = {},
   ): Promise<ResolvedMediaStream> {
     const embedUrl = `https://megaplay.buzz/stream/s-2/${unitId}/${language}`;
 
     // Step 1: Fetch the embed page to get the file ID
     const embedResponse = await this.http.get(embedUrl, {
+      signal: options.signal,
       headers: {
         Referer: this.baseUrl,
       },
@@ -104,6 +115,7 @@ export class AnikotoProvider extends BaseProvider {
     const sourcesResponse = await this.http.get(
       `https://megaplay.buzz/stream/getSources?id=${fileId}`,
       {
+        signal: options.signal,
         headers: {
           Referer: `https://megaplay.buzz/stream/s-5/${unitId}/${language}`,
           'X-Requested-With': 'XMLHttpRequest',
