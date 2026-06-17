@@ -20,10 +20,38 @@ type ContentLanguage = 'sub' | 'dub' | 'raw';
 ### `MediaCatalogType`
 
 ```ts
-type MediaCatalogType = 'ANIME' | 'MOVIE' | 'TV' | 'MANGA' | 'LIVE_TV';
+type MediaCatalogType = 'ANIME' | 'MOVIE' | 'TV' | 'MANGA';
 ```
 
 Supported types include `'ANIME'` and `'MANGA'`.
+
+### `Urn`
+
+```ts
+type Urn = string;
+```
+
+Every `id` flowing in or out of the SDK is a URN of shape
+`${providerId}:${rawId}`. The first colon is the separator; the raw
+portion is opaque and may itself contain colons or slashes. See the
+[URN helpers](#urn-helpers) section for builders/parsers.
+
+### `CallOptions`
+
+```ts
+interface CallOptions {
+  /** Cancels the in-flight call. Threaded into fetch + rate limiter + retry. */
+  signal?: AbortSignal;
+  /** Meta-layer only: throw on a missing episode instead of falling back. */
+  strictEpisodeMatching?: boolean;
+  /** Meta-layer only: behaviour of the absolute-episode rescue. */
+  episodeAbsoluteMatching?: 'auto' | 'always' | 'never';
+}
+```
+
+The canonical options bag — every public method in the SDK (content and
+metadata providers, mapping client) accepts an instance. Fields that
+aren't meaningful at a particular layer are simply ignored there.
 
 ### `IMediaSearchResult`
 
@@ -31,12 +59,15 @@ Returned by `provider.search()`.
 
 ```ts
 interface IMediaSearchResult {
-  id: string; // opaque, pass to fetchContentUnits
+  id: Urn; // `${providerId}:${rawId}` — pass to fetchContentUnits
   title: string;
   thumbnailUrl?: string;
   catalogType: MediaCatalogType;
   providerId: string; // matches provider.id
   availableLanguages?: ContentLanguage[]; // omitted if unknown
+  /** Year of release, when the provider exposes it. Used by the
+   * metadata layer's fuzzy matcher as a discriminator. */
+  year?: number;
 }
 ```
 
@@ -46,12 +77,19 @@ Returned by `provider.fetchContentUnits()`. Represents a single episode or chapt
 
 ```ts
 interface IContentUnit {
-  id: string; // opaque, pass to resolveStream
+  id: Urn; // pass to resolveStream
   title: string;
   number: number; // episode/chapter number (may be fractional, e.g. 1.5)
   availableLanguages?: ContentLanguage[]; // e.g. ['sub', 'dub']: omitted if unknown
   availableSubtitles?: ISubtitleAvailability[]; // optional, list-time metadata
   availableQualities?: IVideoPayload['quality'][]; // optional
+  /** Per-episode metadata folded in by the metadata layer
+   * (AniList `streamingEpisodes`, Jikan filler/recap flags). */
+  thumbnailUrl?: string;
+  description?: string;
+  airDate?: string;
+  isFiller?: boolean;
+  isRecap?: boolean;
 }
 ```
 
@@ -149,8 +187,53 @@ interface HttpClientConfig {
   proxyType?: 'prepend' | 'query'; // default: 'prepend'
   proxyQueryParam?: string; // used when proxyType='query'; default: 'url'
   defaultHeaders?: Record<string, string>;
+  /** Per-host token-bucket rate limits. Merged on top of DEFAULT_RATE_LIMITS
+   *  (AniList / Jikan / Kitsu / MALSync / Anify / arm-server). */
+  rateLimits?: PerHostRateLimits;
+  defaultRateLimit?: RateLimitConfig;
+  disableRateLimit?: boolean;
+  /** Retry policy. Defaults to 3 attempts with exponential backoff on
+   *  408/425/429/5xx and transient network errors. Honours Retry-After. */
+  retry?: RetryConfig | false;
+  /** Pluggable transport. Defaults to CurlFallbackTransport on Node. */
+  transport?: HttpTransport;
 }
 ```
+
+### Rate limiting + retry + AbortSignal
+
+`HttpClient.request` composes three middlewares around the underlying
+transport, each on by default:
+
+- **Per-host token-bucket rate limiter** (`RateLimiter`) with built-in
+  policies for the catalogue APIs (`DEFAULT_RATE_LIMITS`). Re-acquired
+  on every retry so a retry storm can't blow past the configured cap.
+- **Exponential-backoff retry** (`withRetry`) that honours `Retry-After`
+  on `408/425/429/5xx` responses and transient network errors. Throws
+  `HttpRetryableError` after exhausting attempts.
+- **AbortSignal composition**: the caller's `options.signal` and the
+  internal timeout signal are merged — either one aborts the in-flight
+  request.
+
+```ts
+const ac = new AbortController();
+setTimeout(() => ac.abort(), 1500);
+await http.get('https://graphql.anilist.co', { signal: ac.signal });
+```
+
+### Pluggable transport
+
+`HttpTransport` is a one-method interface: `fetch(url, init)`. Two
+implementations ship:
+
+- **`CurlFallbackTransport`** (default on Node): tries `fetch` first, falls
+  back to `curl` via `child_process.execSync` on network error.
+- **`FetchTransport`**: plain `fetch`. Use on Workers/Deno or in tests
+  where the curl fallback is undesirable.
+
+Bring your own (Undici dispatcher, Cloudflare-bypass proxy, in-process
+test transport) by implementing the interface and passing it as
+`transport`.
 
 ### Methods
 
@@ -189,9 +272,37 @@ proxyQueryParam: 'url'
 result:          'https://proxy.example.com/fetch?url=https%3A%2F%2Fcdn.site.com%2Fvideo.m3u8'
 ```
 
-### curl fallback
+### curl fallback (default Node transport)
 
-When running in Node and `fetch` throws (timeout, TLS error, anti-bot rejection), `HttpClient` automatically retries the request using `curl` via `child_process.execSync`. The fallback synthesises a standard `Response`-shaped object, so callers see no difference. Cookie persistence uses a per-client temp file.
+When `CurlFallbackTransport` is in use and `fetch` throws (timeout, TLS
+error, anti-bot rejection), the transport automatically retries the
+request using `curl` via `child_process.execSync`. The fallback
+synthesises a standard `Response`-shaped object, so callers see no
+difference. Cookie persistence uses a per-client temp file.
+
+---
+
+## URN helpers
+
+Every `id` flowing through the SDK is a URN of shape
+`${providerId}:${rawId}`. Helpers live in `utils/urn.ts`:
+
+```ts
+buildUrn(providerId: string, rawId: string): Urn
+parseUrn(urn: string): { providerId: string; rawId: string }
+unwrapUrn(providerId: string, urn: string): string
+strictUnwrapUrn(providerId: string, urn: string): string  // throws on mismatch
+isUrn(value: string, providerId?: string): boolean
+
+// Typed catalogue URNs — for MAL/Kitsu where the integer ID isn't
+// globally unique across anime/manga.
+buildTypedUrn(providerId: string, kind: 'anime' | 'manga', rawId: string | number): Urn
+parseTypedUrn(providerId: string, urn: string): { kind?: 'anime' | 'manga'; rawId: string }
+```
+
+`strictUnwrapUrn` throws on a prefix mismatch — use it in routing paths
+where a wrong URN should fail loudly instead of being silently
+misrouted (the server uses it on `/meta/info`).
 
 ---
 
@@ -204,26 +315,176 @@ abstract class BaseProvider {
 
   constructor(protected http: HttpClient);
 
-  abstract search(query: string): Promise<IMediaSearchResult[]>;
-
-  // Language-agnostic: returns one unified list. Each unit advertises its
-  // available translations via `availableLanguages`.
-  abstract fetchContentUnits(mediaId: string): Promise<IContentUnit[]>;
-
-  abstract resolveStream(
-    unitId:    string,
-    language?: ContentLanguage
+  // Public API — URN-prefixed ids in and out.
+  search(query: string, options?: CallOptions): Promise<IMediaSearchResult[]>;
+  fetchContentUnits(mediaUrn: Urn, options?: CallOptions): Promise<IContentUnit[]>;
+  resolveStream(
+    unitUrn:   Urn,
+    language?: ContentLanguage,
+    options?:  CallOptions,
   ): Promise<ResolvedMediaStream>;
+  fetchUnitTracks(
+    unitUrn:   Urn,
+    language?: ContentLanguage,
+    options?:  CallOptions,
+  ): Promise<IUnitTracks>;
 
-  // Optional: list the subtitle/quality tracks for a single unit without
-  // resolving the playable stream. Implement when the provider exposes a
-  // cheap metadata endpoint.
-  fetchUnitTracks?(
-    unitId:    string,
-    language?: ContentLanguage
+  get supportsUnitTracks(): boolean;
+
+  /** Optional: provider-native cross-source lookup. When a provider's
+   *  site indexes by AniList/MAL ID directly, implement this and
+   *  MappingClient will use it before the external/fuzzy fallbacks. */
+  lookupByMapping?(
+    mappings: IMediaMappings,
+    options?: CallOptions,
+  ): Promise<string | null>;
+
+  /** Optional: MALSync `Sites` aliases this provider corresponds to. */
+  static readonly malsyncSites: readonly string[];
+
+  /** Optional: caps in-flight calls on this provider via FIFO semaphore. */
+  readonly maxConcurrency: number;
+
+  // Subclass surface — raw (non-URN) IDs. Subclasses implement these;
+  // the public methods above wrap them with URN encoding + concurrency cap.
+  protected abstract searchRaw(
+    query:    string,
+    options?: CallOptions,
+  ): Promise<IMediaSearchResult[]>;
+  protected abstract fetchContentUnitsRaw(
+    rawMediaId: string,
+    options?:   CallOptions,
+  ): Promise<IContentUnit[]>;
+  protected abstract resolveStreamRaw(
+    rawUnitId: string,
+    language?: ContentLanguage,
+    options?:  CallOptions,
+  ): Promise<ResolvedMediaStream>;
+  protected fetchUnitTracksRaw?(
+    rawUnitId: string,
+    language?: ContentLanguage,
+    options?:  CallOptions,
   ): Promise<IUnitTracks>;
 }
 ```
+
+---
+
+## Metadata layer
+
+### `IMediaMetadata`
+
+The full normalized metadata record returned by
+`metaProvider.fetchMediaInfo`. Includes everything the catalogue ships:
+
+```ts
+interface IMediaMetadata {
+  id: Urn; // e.g. 'anilist:1'
+  providerId: string; // 'anilist' | 'mal' | 'kitsu'
+  catalogType: MediaCatalogType;
+  title: IMediaTitle; // romaji / english / native / userPreferred
+  description?: string;
+  cover?: IMediaImage;
+  banner?: string;
+  status?: MediaStatus;
+  format?: MediaFormat;
+  episodeCount?: number;
+  chapterCount?: number;
+  durationMinutes?: number;
+  genres?: string[];
+  tags?: string[];
+  studios?: string[];
+  year?: number;
+  season?: MediaSeason;
+  startDate?: string; // ISO 8601 yyyy-mm-dd
+  endDate?: string;
+  score?: number; // normalized 0–100
+  trailer?: string;
+  isAdult?: boolean;
+  synonyms?: string[];
+  mappings?: IMediaMappings; // cross-source: anilist / mal / kitsu / anidb / …
+  relations?: IMediaRelation[];
+  characters?: IMediaCharacter[]; // includes voiceActors[]
+  staff?: IMediaStaff[];
+  recommendations?: IMediaRecommendation[];
+  externalLinks?: IMediaExternalLink[];
+  streamingEpisodes?: IStreamingEpisode[]; // per-episode title/thumbnail
+}
+```
+
+### `BaseMetadataProvider`
+
+```ts
+abstract class BaseMetadataProvider {
+  abstract readonly id: string; // 'anilist' | 'mal' | 'kitsu'
+  abstract readonly supportedTypes: MediaCatalogType[];
+
+  search(query: string, options?: CallOptions): Promise<IMetaSearchResult[]>;
+  fetchMediaInfo(metaUrn: Urn, options?: CallOptions): Promise<IMediaMetadata>;
+  fetchContentUnits(
+    metaUrn: Urn,
+    contentProvider: BaseProvider,
+    options?: CallOptions,
+  ): Promise<IContentUnit[]>;
+  resolveStream(
+    metaUrn: Urn,
+    episodeNumber: number,
+    contentProvider: BaseProvider,
+    language?: ContentLanguage,
+    options?: CallOptions,
+  ): Promise<ResolvedMediaStream>;
+  fetchUnitTracks(
+    metaUrn: Urn,
+    episodeNumber: number,
+    contentProvider: BaseProvider,
+    language?: ContentLanguage,
+    options?: CallOptions,
+  ): Promise<IUnitTracks>;
+  browse(kind: BrowseKind, options?: BrowseOptions): Promise<IMetaSearchResult[]>;
+  supportsBrowseKind(kind: BrowseKind): boolean;
+
+  /** Walks PREQUEL relations to compute a season offset for multi-season
+   *  titles where the meta record's per-season numbering misaligns with
+   *  the content provider's continuous list. */
+  computeAbsoluteEpisodeOffset(metaUrn: Urn, options?: CallOptions): Promise<number>;
+}
+
+type BrowseKind = 'trending' | 'popular' | 'seasonal' | 'top';
+```
+
+Concrete providers: `AnilistMeta`, `MalMeta`, `KitsuMeta`.
+
+### `MappingClient`
+
+Resolves a metadata record onto a content provider's raw media ID via a
+four-step waterfall: SdkCache → `provider.lookupByMapping` →
+MALSync/Anify/arm-server (raced in parallel) → fuzzy title search.
+
+```ts
+class MappingClient {
+  constructor(http: HttpClient, options?: MappingClientOptions);
+
+  resolveProviderMediaId(
+    metadata: IMediaMetadata,
+    contentProvider: BaseProvider,
+    options?: CallOptions,
+  ): Promise<MappingResolution | null>;
+}
+
+interface MappingResolution {
+  providerId: string;
+  rawMediaId: string;
+  matchedTitle: string;
+  method: 'cached' | 'provider' | 'malsync' | 'anify' | 'arm' | 'fuzzy';
+  similarity?: number;
+}
+```
+
+The fuzzy matcher uses composite similarity (Sørensen–Dice + token
+Jaccard + prefix score) with year and catalogType discriminators and an
+optional episode-count cross-check for borderline matches. The metadata
+record is never mutated; results land in the optional `SdkCache` keyed
+by `mapping:${metaProvider}:${metaNativeId}:${contentProvider}`.
 
 ---
 
@@ -385,16 +646,33 @@ function startServer(options: ServerOptions): http.Server;
 
 interface ServerOptions {
   providers: BaseProvider[];
+  /** Metadata providers exposed under `/meta/*`. */
+  metaProviders?: BaseMetadataProvider[];
   port?: number; // default: 3000
   auth?: { token: string };
-  proxy?: boolean; // enable /proxy and rewrite stream + subtitle URLs through it
-  cache?: SdkCache; // memoize /search, /content, /stream, /tracks
+  proxy?: boolean;
+  /** Explicit proxy base. When omitted, derived from each request's
+   *  Host header (+ X-Forwarded-Proto) — so the SDK works behind
+   *  reverse proxies without configuration. */
+  proxyBase?: string;
+  /** When set, /proxy requires an HMAC-SHA256 `sig` query parameter
+   *  on every request. The server signs URLs it emits automatically. */
+  proxySignSecret?: string;
+  /** Suffix-matched SSRF allowlist. Targets outside the list return 403. */
+  proxyAllowedHosts?: string[];
+  cache?: SdkCache;
 }
 ```
 
 Launches a Node `http.Server`. Returns the server instance so you can call `server.close()`. All requests must be `GET`; all responses are JSON. See [HTTP Server](/docs/http-server/) for full route documentation and [Stream Proxy](/docs/proxy/) for the proxy behaviour.
 
-Routes: `/search`, `/content`, `/stream`, `/tracks`, `/proxy` (when `proxy: true`), and download routes `/download/video`, `/download/video/progress`, `/download/video/file`, `/download/manga/page`, `/download/manga/chapter`, `/download/manga/chapter/progress`, `/download/manga/chapter/file`.
+Routes:
+
+- **Content provider**: `/search`, `/content`, `/stream`, `/tracks`
+- **Metadata layer**: `/meta/search`, `/meta/info`, `/meta/content`, `/meta/stream`, `/meta/tracks`, `/meta/browse`
+- **Discovery**: `/health`, `/openapi.json`
+- **Downloads**: `/download/video`, `/download/video/progress`, `/download/video/file`, `/download/manga/page`, `/download/manga/chapter`, `/download/manga/chapter/progress`, `/download/manga/chapter/file`
+- **Proxy** (when `proxy: true`): `/proxy`
 
 ---
 

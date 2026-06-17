@@ -24,8 +24,77 @@ startServer({
 That's it. Three things happen automatically:
 
 1. A `/proxy` endpoint becomes active.
-2. Every `sourceUrl` in anime `/stream` responses and every URL in `imageUrls` for manga `/stream` responses is rewritten to go through `/proxy`, with the required headers encoded in the URL. Your frontend uses these URLs as-is: no header forwarding needed.
-3. Every subtitle `url` returned in `/stream` or `/tracks` responses is rewritten through `/proxy` too, with a `ct=text/vtt` hint so the proxy forces the right `Content-Type` even when the upstream CDN serves `application/octet-stream`.
+2. Every `sourceUrl` in anime `/stream` responses (and `/meta/stream`) and every URL in `imageUrls` for manga `/stream` responses is rewritten to go through `/proxy`, with the required headers encoded in the URL. Your frontend uses these URLs as-is: no header forwarding needed.
+3. Every subtitle `url` returned in `/stream`, `/tracks`, `/meta/stream`, or `/meta/tracks` responses is rewritten through `/proxy` too, with a `ct=text/vtt` hint so the proxy forces the right `Content-Type` even when the upstream CDN serves `application/octet-stream`.
+
+## proxyBase resolution
+
+By default the proxy URL is derived per-request from the incoming
+`Host` header (and `X-Forwarded-Proto` when present), so the SDK works
+behind reverse proxies and on cloud hosts without configuration.
+
+Set `proxyBase` explicitly when the public URL differs from what `Host`
+reports (e.g. `https://api.example.com` reverse-proxied to internal
+`:3000`):
+
+```ts
+startServer({
+  providers: [
+    /* … */
+  ],
+  proxy: true,
+  proxyBase: 'https://api.example.com/proxy',
+});
+```
+
+## HMAC-signed URLs
+
+Setting `proxySignSecret` makes `/proxy` require an HMAC-SHA256 `sig`
+query parameter on every request. The signature is computed over `url`
+plus the optional `|h=<h>` payload, keyed by the secret, hex-encoded.
+The server signs the URLs it emits automatically, so most callers don't
+need to do anything beyond setting the option.
+
+```ts
+startServer({
+  providers: [
+    /* … */
+  ],
+  proxy: true,
+  proxySignSecret: process.env.PROXY_SECRET,
+});
+```
+
+Unsigned or invalid-signature requests return **401**. Use this in any
+deployment where the proxy is reachable from the public internet —
+without it, an attacker can use your server as a generic HTTP relay.
+
+If a caller needs to sign a URL out-of-band:
+
+```ts
+import * as crypto from 'node:crypto';
+const sig = crypto.createHmac('sha256', secret).update(targetUrl).digest('hex');
+const url = `${proxyBase}?url=${encodeURIComponent(targetUrl)}&sig=${sig}`;
+```
+
+## SSRF allowlist
+
+`proxyAllowedHosts: string[]` restricts `/proxy` to a suffix-matched
+list of upstream hostnames. Each entry covers all subdomains:
+
+```ts
+startServer({
+  providers: [
+    /* … */
+  ],
+  proxy: true,
+  proxyAllowedHosts: ['wixstatic.com', 'allanime.day', 'mp4upload.com', 'uploads.mangadex.org'],
+});
+```
+
+Targets outside the list return **403**. When unset, all hosts are
+allowed — fine for local development; combine with `proxySignSecret`
+in production.
 
 ## How stream URLs are rewritten
 
@@ -54,14 +123,15 @@ The `h` param is the base64-encoded JSON of the original headers object. The pro
 ## The `/proxy` endpoint
 
 ```
-GET /proxy?url=<encoded-url>[&h=<base64-headers>][&ct=<content-type>]
+GET /proxy?url=<encoded-url>[&h=<base64-headers>][&ct=<content-type>][&sig=<hmac-sha256>]
 ```
 
-| Param | Required | Description                                                             |
-| ----- | -------- | ----------------------------------------------------------------------- |
-| `url` | ✓        | URL-encoded target URL to fetch                                         |
-| `h`   |          | Base64-encoded JSON of request headers to forward upstream              |
-| `ct`  |          | Override the response `Content-Type` (used for `text/vtt` on subtitles) |
+| Param | Required                             | Description                                                             |
+| ----- | ------------------------------------ | ----------------------------------------------------------------------- | ---------------------------------------- |
+| `url` | ✓                                    | URL-encoded target URL to fetch                                         |
+| `h`   |                                      | Base64-encoded JSON of request headers to forward upstream              |
+| `ct`  |                                      | Override the response `Content-Type` (used for `text/vtt` on subtitles) |
+| `sig` | when `proxySignSecret` is configured | HMAC-SHA256 of `url` plus optional `                                    | h=<h>`, keyed by the secret, hex-encoded |
 
 The response includes `Access-Control-Allow-Origin: *` and passes through the upstream body. The `Content-Type` is the upstream value unless `ct` is set (or the proxy detects an HLS manifest, in which case it serves `application/vnd.apple.mpegurl`).
 
@@ -83,7 +153,7 @@ Subtitle URLs returned in `IVideoPayload.subtitles` and `IUnitTracks.subtitles` 
 </video>
 ```
 
-If you're constructing subtitle URLs by hand outside of `startServer`, the SDK exports `proxifySubtitleUrl(proxyBase, track, opts?)` that does this encoding for you.
+If you're constructing subtitle URLs by hand outside of `startServer`, the SDK exports `proxifySubtitleUrl(proxyBase, track, opts?)` that does this encoding for you — pass `signSecret` in `opts` when the server is configured with `proxySignSecret`.
 
 ## Playing streams in the browser
 

@@ -1,0 +1,72 @@
+---
+title: Kitsu
+description: How to use the KitsuMeta metadata provider in anime-sdk.
+---
+
+`KitsuMeta` is the Kitsu front-end, backed by the public
+[`kitsu.io`](https://kitsu.io) JSON:API. Kitsu's catalogue is smaller
+than AniList's or MAL's, but it ships a rich cross-source mapping graph
+— making it especially useful when callers already have a Kitsu ID, or
+when you want to enrich your `IMediaMappings` with AniList/MAL/AniDB/TVDB
+links.
+
+No API key required.
+
+## Usage
+
+```ts
+import { HttpClient, KitsuMeta, AllmangaProvider } from 'anime-sdk';
+
+const http = new HttpClient();
+const meta = new KitsuMeta(http);
+
+const info = await meta.fetchMediaInfo('kitsu:anime:1');
+console.log(info.mappings); // { kitsu: 1, mal: ..., anilist: ..., anidb: ... }
+
+const allmanga = new AllmangaProvider(http);
+const stream = await meta.resolveStream('kitsu:anime:1', 1, allmanga, 'sub');
+```
+
+## URN shape — typed
+
+Like MAL, Kitsu integer IDs aren't globally unique across anime/manga.
+The URN encodes the catalogue kind:
+
+```
+kitsu:anime:1
+kitsu:manga:13
+```
+
+Legacy bare URNs (`kitsu:1`) still resolve.
+
+## Cross-source mappings
+
+Kitsu's relationship graph publishes per-record `mappings` to MAL,
+AniList, AniDB, and TheTVDB. `KitsuMeta.fetchMediaInfo` pulls them
+through to `IMediaMetadata.mappings`, so you can pivot to a different
+metadata layer without a second lookup:
+
+```ts
+const info = await kitsuMeta.fetchMediaInfo('kitsu:anime:1');
+if (info.mappings?.anilist) {
+  const anilistInfo = await anilistMeta.fetchMediaInfo(`anilist:${info.mappings.anilist}`);
+}
+```
+
+## Characteristics
+
+| Feature                   | Details                                                |
+| ------------------------- | ------------------------------------------------------ |
+| **Catalogues**            | Anime + Manga                                          |
+| **Native ID shape**       | `kitsu:anime:<integer>` / `kitsu:manga:<integer>`      |
+| **Endpoint**              | `kitsu.io/api/edge` (free, keyless)                    |
+| **Rate limit (built-in)** | 100 req/min                                            |
+| **Enrichments**           | cross-source `mappings` (AniList / MAL / AniDB / TVDB) |
+| **Browse**                | not implemented                                        |
+
+:::note
+Kitsu fronts its API with Cloudflare. In some network paths (cloud
+runners, certain VPNs) the JSON:API may be unreachable. That's an
+infrastructure issue, not an SDK one — combine with the proxy or run
+from a network that can reach `kitsu.io`.
+:::

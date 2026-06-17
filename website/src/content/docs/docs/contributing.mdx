@@ -21,39 +21,49 @@ Site layouts change. If a provider's scraping logic breaks because the upstream 
 
 Add one when the embed format is genuinely novel: not handled by `GenericHlsExtractor`, `Mp4UploadExtractor`, `BloggerExtractor`, or `VidstreamingExtractor`. Common cases: new obfuscation schemes (encrypted player config, custom XOR), embed hosts that require a multi-step auth flow, or platforms that gate streams behind a non-standard API.
 
+### Metadata provider improvements
+
+Extending `MalMeta` / `KitsuMeta` toward AniList's parity (characters with voice actors, staff, recommendations), AniList batch fetching (`Page.media(id_in: [...])`), or richer Anify/arm-server integration. Any new field must be live-tested against the real upstream.
+
+### Mapping-client improvements
+
+Better fuzzy-match heuristics for tricky titles (multi-season shows, abbreviations, romanization variants); provider-specific `lookupByMapping` implementations for sites that index by AniList/MAL ID directly; new external mapping sources.
+
 ### Transport and HTTP server improvements
 
 - Proxy mode extensions (new `proxyType` variants, header-based routing)
 - Better `curl` fallback diagnostics
+- Custom `HttpTransport` implementations (Undici dispatcher, Workers fetch, Bun compatibility)
 - HTTP server: new routes, streaming responses, per-provider auth
-- Bun compatibility fixes
 
-### Unit tests
+### Unit / pure-logic tests
 
-Edge cases in `HlsUtils.rewriteManifest`, extractor HTML fixtures, language inference: these are always welcome and run in CI without a network.
+Edge cases in `HlsUtils.rewriteManifest`, extractor HTML fixtures, language inference, URN helpers, similarity scoring, rate limiter, retry policy. These run in CI without a network.
 
 ---
 
 ## What's out of scope
 
-| Area                                 | Why                                                                                                                                                                                                                                             |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Browser / frontend support**       | The SDK depends on `child_process` (curl fallback), Node-specific `crypto.subtle` usage, and shell-out for E2E tests. Browser support would require a fundamentally different transport layer and likely wouldn't work due to CORS constraints. |
-| **UI components or players**         | anime-sdk is a headless library. Rendering is out of scope.                                                                                                                                                                                     |
-| **Login-gated or paywall sites**     | anime-sdk is for publicly accessible streams. Sites that require accounts are out of scope.                                                                                                                                                     |
-| **Caching or rate-limiting layers**  | Those belong in the application layer, not the SDK.                                                                                                                                                                                             |
-| **CLI wrappers or download scripts** | Out of scope: use the HTTP server or call the SDK directly.                                                                                                                                                                                     |
-| **Mocked E2E tests**                 | All E2E tests must hit live sites. A provider test that passes with mocks but fails against the real site is worse than no test.                                                                                                                |
+| Area                                        | Why                                                                                                                                                                                                                                             |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Browser / frontend support**              | The SDK depends on `child_process` (curl fallback), Node-specific `crypto.subtle` usage, and shell-out for E2E tests. Browser support would require a fundamentally different transport layer and likely wouldn't work due to CORS constraints. |
+| **UI components or players**                | anime-sdk is a headless library. Rendering is out of scope.                                                                                                                                                                                     |
+| **Login-gated or paywall sites**            | anime-sdk is for publicly accessible streams. Sites that require accounts are out of scope.                                                                                                                                                     |
+| **Caching or rate-limiting layers**         | Those belong in the application layer, not the SDK.                                                                                                                                                                                             |
+| **CLI wrappers or download scripts**        | Out of scope: use the HTTP server or call the SDK directly.                                                                                                                                                                                     |
+| **Mocked E2E tests**                        | All E2E tests must hit live sites. A provider test that passes with mocks but fails against the real site is worse than no test.                                                                                                                |
+| **Tests with graceful skip-on-unreachable** | A skipped test is a lie. A test must pass for real or be deleted. See `CLAUDE.md` for the non-negotiable testing rules.                                                                                                                         |
 
 ---
 
 ## Overview
 
-anime-sdk has three layers:
+anime-sdk has four layers:
 
-- **Transport** (`src/transport/`): `HttpClient`, `DomRegistry`, `HlsUtils`. Rarely needs changes for new providers.
+- **Transport** (`src/transport/`): `HttpClient`, `HttpTransport`, `RateLimiter`, `withRetry`, `DomRegistry`, `HlsUtils`. Rarely needs changes for new providers.
 - **Extractors** (`src/extractors/`): stateless embed parsers. Add one when an embed platform is genuinely novel.
-- **Providers** (`src/providers/`): site-specific adapters. This is where most contributions live.
+- **Providers** (`src/providers/`): site-specific adapters. This is where most content-provider contributions live.
+- **Metadata** (`src/meta/`): catalogue-level data (AniList / MAL / Kitsu) plus `MappingClient` for cross-source mapping. Touch this layer for new catalogues or mapping heuristics.
 
 All relative imports in `src/` must include the `.js` extension (`import { X } from './foo.js'`). TypeScript is configured with `module: NodeNext`.
 

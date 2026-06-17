@@ -36,6 +36,14 @@ export default defineConfig({
             { label: 'MangaPill', link: '/docs/providers/mangapill/' },
           ],
         },
+        {
+          label: 'Metadata',
+          items: [
+            { label: 'AniList', link: '/docs/providers/anilist/' },
+            { label: 'MyAnimeList', link: '/docs/providers/mal/' },
+            { label: 'Kitsu', link: '/docs/providers/kitsu/' },
+          ],
+        },
         { label: 'HTTP Server', link: '/docs/http-server/' },
         { label: 'Stream Proxy', link: '/docs/proxy/' },
         { label: 'Downloads', link: '/docs/download/' },

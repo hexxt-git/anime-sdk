@@ -1,0 +1,58 @@
+---
+title: AniList
+description: How to use the AnilistMeta metadata provider in anime-sdk.
+---
+
+`AnilistMeta` hits the public `graphql.anilist.co` endpoint to fetch rich
+catalogue metadata for anime and manga: titles, descriptions, covers,
+relations (sequel/prequel), characters with voice actors, staff,
+recommendations, external streaming links, and per-episode
+`streamingEpisodes` (title + thumbnail). It implements browse for
+trending, popular, seasonal, and top — paginated.
+
+No API key required.
+
+## Usage
+
+```ts
+import { HttpClient, AnilistMeta, AllmangaProvider } from 'anime-sdk';
+
+const http = new HttpClient();
+const meta = new AnilistMeta(http);
+
+// Pull full metadata for AniList ID 1 (Cowboy Bebop).
+const info = await meta.fetchMediaInfo('anilist:1');
+console.log(info.title.english, info.episodeCount, info.score);
+
+// Use the same URN to resolve a stream on any content provider.
+const allmanga = new AllmangaProvider(http);
+const stream = await meta.resolveStream('anilist:1', 1, allmanga, 'sub');
+```
+
+## URN shape
+
+```
+anilist:21          # numeric AniList ID, single global namespace
+```
+
+`AnilistMeta` always emits and accepts this URN form.
+
+## Browse
+
+```ts
+await meta.browse('trending', { catalogType: 'ANIME', perPage: 10 });
+await meta.browse('seasonal', { season: 'FALL', year: 2024 });
+await meta.browse('top');
+await meta.browse('popular');
+```
+
+## Characteristics
+
+| Feature                   | Details                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Catalogues**            | Anime + Manga                                                                                       |
+| **Native ID shape**       | `anilist:<integer>`                                                                                 |
+| **Endpoint**              | `graphql.anilist.co` (free, keyless)                                                                |
+| **Rate limit (built-in)** | 85 req/min (matches AniList's 90/min cap, with headroom)                                            |
+| **Enrichments**           | relations, characters (+ voice actors), staff, recommendations, external links, `streamingEpisodes` |
+| **Browse**                | `trending`, `popular`, `seasonal`, `top`                                                            |

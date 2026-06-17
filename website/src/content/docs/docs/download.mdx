@@ -127,6 +127,29 @@ The ZIP writer is self-contained with no external dependencies and implements th
 
 ---
 
+## Downloading via the metadata layer
+
+The download helpers consume `IVideoPayload[]` / `IMangaPayload`, which is
+what every `resolveStream` returns — including
+`BaseMetadataProvider.resolveStream`. So you can drive a download with an
+AniList URN + an episode number, letting the SDK resolve the
+cross-source mapping for you:
+
+```ts
+import { HttpClient, AnilistMeta, AllmangaProvider, downloadVideo } from 'anime-sdk';
+
+const http = new HttpClient();
+const meta = new AnilistMeta(http);
+const allmanga = new AllmangaProvider(http);
+
+const result = await meta.resolveStream('anilist:1', 1, allmanga, 'sub');
+if (result.type === 'video') {
+  await downloadVideo(result.streams, './cowboy-bebop-ep1.mp4');
+}
+```
+
+---
+
 ## Batch download
 
 `downloadVideo` is safe to run concurrently per episode. Use `Promise.allSettled` to continue even if individual downloads fail:

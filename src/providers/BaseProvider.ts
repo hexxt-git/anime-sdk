@@ -13,7 +13,7 @@ import {
 import { buildUrn, unwrapUrn } from '../utils/urn.js';
 
 // Re-export so subclasses can stay close to the type they need.
-export { CallOptions } from '../types/index.js';
+export type { CallOptions } from '../types/index.js';
 
 /**
  * @deprecated Use {@link CallOptions} from `src/types/index.ts` — the
