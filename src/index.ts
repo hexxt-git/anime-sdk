@@ -1,3 +1,24 @@
+// ── 2.0 public surface ────────────────────────────────────────────────────────
+export { createSdk, Sdk } from './sdk.js';
+export type { ProgressiveResult } from './sdk.js';
+export type {
+  Media,
+  Episode,
+  Chapter,
+  Stream,
+  Pages,
+  List,
+  SourceInfo,
+  Score,
+  MediaTitle,
+  MediaCover,
+  Subtitle,
+} from './types.js';
+export { AniError, AniErrorCode } from './errors.js';
+export type { AniErrorCode as AniErrorCodeType } from './errors.js';
+export type { SdkOptions } from './config.js';
+
+// ── Legacy 1.x surface (kept for backwards compat; removed in Phase 10) ──────
 // Types
 export * from './types/index.js';
 
