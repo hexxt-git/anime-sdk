@@ -1,1 +1,34 @@
-// Phase 2: SdkOptions + resolveOptions()
+export interface SdkOptions {
+  sources?: string[];
+  disabled?: string[];
+  http?: {
+    timeoutMs?: number;
+    retries?: number;
+    userAgent?: string;
+  };
+  proxy?: {
+    signSecret?: string;
+    allowedHosts?: string[];
+  };
+  cache?: {
+    get(k: string): unknown;
+    set(k: string, v: unknown): void;
+  };
+  ratelimit?: Record<string, number>;
+}
+
+const DEFAULTS: Required<Pick<SdkOptions, 'http'>> = {
+  http: {
+    timeoutMs: 30000,
+    retries: 3,
+  },
+};
+
+export function resolveOptions(
+  opts?: SdkOptions,
+): SdkOptions & { http: NonNullable<SdkOptions['http']> } {
+  return {
+    ...opts,
+    http: { ...DEFAULTS.http, ...opts?.http },
+  };
+}
