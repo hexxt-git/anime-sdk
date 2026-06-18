@@ -13,69 +13,64 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Requires Node 20+ and `ffmpeg` on `PATH` (E2E suite shells out to it).
 
-## Architecture
+## Architecture (v2.0)
 
-The SDK has four layers, all wired around a single `HttpClient`:
+The SDK has five layers:
 
-**1. Transport (`src/transport/`)**: site-agnostic plumbing.
+**1. Internal plumbing (`src/internal/`)**: private, never exported.
 
-- `HttpClient` wraps `fetch`, layered with a per-host rate limiter (`RateLimiter`, with built-in policies for AniList/Jikan/Kitsu/MALSync/Anify/arm-server), an exponential-backoff retry that honors `Retry-After` (`withRetry` + `HttpRetryableError`), and a curl-based fallback transport. The fallback is encapsulated behind the `HttpTransport` interface (`CurlFallbackTransport` default, `FetchTransport` for runtimes without `child_process`). `AbortSignal` is composed end-to-end: the caller's signal plus the SDK's timeout signal both abort the in-flight fetch.
-- Rate limit + retry are on by default with sensible policies for the bundled catalogue APIs (`DEFAULT_RATE_LIMITS`, `DEFAULT_RETRY_STATUSES`). Disable per-instance via `disableRateLimit: true` and `retry: false`.
-- `HttpClient` supports two proxy routing modes (`prepend` puts the proxy in front of `host/path`; `query` passes the URL as a query param): `requestUrl(url)` is the single chokepoint for that rewrite.
-- `DomRegistry` is a global single-parser registry. `BrowserDomParser` works in browsers; in Node, `dom.ts` automatically registers `linkedom` (a direct dependency) as the `globalThis.DOMParser` shim on import — consumers and tests no longer need to do this manually. Providers call `DomRegistry.parse(html)`: they never touch `DOMParser` directly. `DomRegistry.register()` still accepts a custom parser and takes full precedence.
-- `HlsUtils.rewriteManifest` rewrites every URI line in an `.m3u8` (including `URI="…"` inside `#EXT-X-KEY` / `#EXT-X-MAP`) so chunk fetches go through the same proxy as the manifest fetch.
+- `http.ts`: `HttpClient` wraps `fetch` with per-host rate limiting, exponential-backoff retry (honours `Retry-After`), curl fallback transport, and end-to-end `AbortSignal` composition.
+- `dom.ts`: `DomRegistry` + `BrowserDomParser`. Auto-registers `linkedom` (a direct dependency) on first parse — no consumer shim needed.
+- `hls.ts`: `HlsUtils.rewriteManifest` rewrites `.m3u8` URIs to route through a proxy.
+- `id.ts`: `encodeId`/`decodeId` — base64url-JSON opaque IDs. All `Media`/`Episode`/`Chapter` ids are encoded here. Also exports legacy URN helpers (`buildUrn` etc.) for backward compat.
+- `mapping.ts`: `MappingClient` — cross-source ID resolver. Four-step waterfall: cache → `source.lookupByMapping` → MALSync/Anify (raced) → fuzzy title match. Not exported.
 
-### Unified URN ID space
+**2. Types and errors (`src/types.ts`, `src/errors.ts`, `src/config.ts`)**: all public value types.
 
-Every `id` flowing in or out of the SDK is a URN of shape `${providerId}:${rawId}`. The first colon is the separator; the raw portion is opaque and may itself contain colons or slashes. Helpers in `src/utils/urn.ts`:
+- `Media`, `Episode`, `Chapter`, `Stream`, `Pages`, `List<T>`, `SourceInfo`, `Score` — plain POJOs, `JSON.stringify`-safe.
+- `AniError extends Error` with `AniErrorCode` const enum (`SourceUnavailable`, `NoStream`, `RegionBlocked`, `RateLimited`, `NotFound`, `Cancelled`, `BadId`).
+- `SdkOptions` + `resolveOptions()`.
 
-- `buildUrn(provider, raw)` / `parseUrn(urn)` / `unwrapUrn(provider, urn)` — the standard pair.
-- `strictUnwrapUrn(provider, urn)` — throws on prefix mismatch. The server uses this on `/meta/info` to catch routing bugs at the boundary.
-- `buildTypedUrn(provider, kind, raw)` / `parseTypedUrn(provider, urn)` — typed catalogue URNs (`mal:anime:21`, `kitsu:manga:13`). MAL and Kitsu integer IDs aren't globally unique across anime/manga, so they're encoded with the catalogue kind as the second segment.
+**3. Sources (`src/sources/`)**: internal, not exported from `src/index.ts`.
 
-Providers accept legacy bare IDs as input for backwards compatibility (via the non-strict `unwrapUrn`). Public surface always emits URN form.
+Single `Source` interface (`src/sources/base.ts`) replaces the old `BaseProvider` + `BaseMetadataProvider` split. Capability flags: `search`, `info`, `episodes`, `chapters`, `stream`, `pages`, `browse`, `mapping`.
 
-**2. Extractors (`src/extractors/`)**: stateless, take only an embed URL and an `HttpClient`, return `IVideoPayload[]` (empty if they can't recover a direct stream). `BaseExtractor` is the contract. They're independently usable: a consumer can hand any embed URL to `BloggerExtractor` without involving a provider.
+- Catalogue sources: `anilist.ts`, `mal.ts`, `kitsu.ts` — implement `search`, `info`, `browse`.
+- Anime playback: `allmanga.ts`, `megaplay.ts`, `animeparadise.ts`, `anikoto.ts`, `gogoanime.ts`, `goyabu.ts` — implement `episodes`, `stream`.
+- Manga: `mangadex.ts`, `mangapill.ts`, `weebcentral.ts` — implement `chapters`, `pages`.
 
-**3. Providers (`src/providers/`)**: site-specific. `BaseProvider` defines `search` → `fetchContentUnits(mediaId)` → `resolveStream(unitId, language?)`. `fetchContentUnits` is **language-agnostic** and returns one unified list; each `IContentUnit` carries `availableLanguages: ContentLanguage[]` so the caller picks the translation at `resolveStream` time. Providers may optionally implement `fetchUnitTracks(unitId, language?): Promise<IUnitTracks>` to expose subtitle/quality metadata without paying the `resolveStream` cost. `IVideoPayload.subtitles?: ISubtitleTrack[]` carries playable VTT URLs alongside the stream. Each provider composes one or more extractors:
+All sources use `encodeId`/`decodeId` for IDs. `stream(episodeId)` and `pages(chapterId)` decode the opaque ID to dispatch to the right source.
 
-- `AnimeParadiseProvider`: `api.animeparadise.moe` REST. `/anime/{id}/episode` for the list (sub only). `/ep/{uid}?origin={animeId}` returns the playable HLS link **and** `subData`, which `normalizeSubtitleEntries` (in `utils/subtitles.ts`) turns into VTT-only `ISubtitleTrack[]`. Implements `fetchUnitTracks` cheaply (just `/ep`, no stream URL resolution).
-- `AllmangaProvider`: AllAnime GraphQL → AES-CTR-decrypted `tobeparsed` payload → `Mp4UploadExtractor`, with a `clock.json` fallback for wixmp/sharepoint sources. Source URLs are obfuscated with a `--<hex>` scheme XOR'd with `0x38`; see `decodeAllAnimeSource`. `fetchContentUnits` merges `availableEpisodesDetail.sub` + `.dub` + `.raw` into a single language-agnostic list; unit IDs are `${mediaId}/${epStr}` (legacy `${mediaId}/${epStr}/${lang}` IDs still resolve).
-- `AnikotoProvider`: HTML scrape of `anikototv.to`; uses `anikotoapi.site` for episodes, then delegates to MegaPlay embed for stream/subtitles.
-- `GogoanimeProvider`: HTML scrape of `anineko.to`; vibeplayer embed → `master.m3u8` via `GenericHlsExtractor`.
-- `GoyabuProvider`: pulls a Blogger token from `playersData`, calls Google `batchexecute` to recover the `googlevideo.com` URL via `BloggerExtractor`.
-- `MangadexProvider`: Official JSON API at `api.mangadex.org` for high-quality manga.
-- `MangapillProvider`: HTML scrape of `mangapill.com` for manga.
-- `MegaPlayProvider`: AniList GraphQL for search/episodes; resolves directly against MegaPlay's mapping endpoints.
-- `WeebcentralProvider`: HTML scrape of `weebcentral.com` for manga.
+**4. Registry + SDK (`src/registry.ts`, `src/sdk.ts`, `src/progressive.ts`, `src/health.ts`)**: public API.
 
-All public surface is re-exported from `src/index.ts`, including the shared subtitle utilities (`normalizeSubtitleEntries`, `proxifySubtitleUrl`).
+- `Registry`: holds sources, implements `fanOutSearch` (returns `ProgressiveResult<Media>`), `mergeEpisodes`, `rankPlaybackSources`.
+- `HealthTracker`: rolling 20-call success/latency window per source. Used to rank playback sources.
+- `ProgressiveResult<T>`: implements `AsyncIterable<T>` (results as they arrive) and `PromiseLike<T[]>` (collect all). `cancel()` aborts via `AbortSignal.any()`.
+- `Sdk` class: 9 verbs — `search`, `info`, `sources`, `episodes`, `chapters`, `stream`, `pages`, `browse`, `health`. Each accepts value objects or opaque id strings.
+- `createSdk(opts?)`: zero-config factory that instantiates `HttpClient` + all enabled sources + `Registry`.
 
-**4. Metadata layer (`src/meta/`)**: provider-agnostic catalogue access.
+**5. Server (`src/server/`)**: thin consumer of the SDK.
 
-- `BaseMetadataProvider` is the abstract surface: `search`, `fetchMediaInfo`, `fetchContentUnits(urn, contentProvider)`, `resolveStream(urn, episodeNumber, contentProvider, language?)`, `fetchUnitTracks(...)`, `browse(kind, options)`. Episode selection is by metadata-level number, with `'auto'`/`'always'`/`'never'` absolute-episode rescue (walks PREQUEL relations to compute a season offset).
-- Concrete providers:
-  - `AnilistMeta`: graphql.anilist.co. Surfaces full `IMediaMetadata` plus `relations`, `characters` (with voice actors), `staff`, `recommendations`, `externalLinks`, and `streamingEpisodes` (per-episode title/thumbnail). Implements `browse({trending, popular, seasonal, top})`.
-  - `MalMeta`: Jikan v4 (api.jikan.moe). Typed URNs (`mal:anime:21` / `mal:manga:13`). Populates `streamingEpisodes` with Jikan's `filler`/`recap` flags. Implements `browse({top, popular, seasonal})`. Surfaces `relations` from `/anime/{id}/full`.
-  - `KitsuMeta`: kitsu.io JSON:API. Typed URNs. Surfaces cross-source `mappings` (AniList/MAL/AniDB/TVDB) from Kitsu's relationship graph.
-- `MappingClient` resolves a meta record onto a content provider's raw media ID via a four-step waterfall: SdkCache → `provider.lookupByMapping` → external mapping APIs (MALSync + Anify raced in parallel; arm-server enriches the cache for follow-up lookups) → fuzzy title search. The fuzzy matcher uses composite similarity (Sørensen–Dice + token Jaccard + prefix score) with year and catalogType discriminators and an optional episode-count cross-check for borderline matches. The metadata record is **never mutated**; results land in the `SdkCache` keyed by `mapping:${metaProvider}:${metaNativeId}:${contentProvider}`.
-- Per-content-provider native lookup hooks: `BaseProvider.lookupByMapping?(mappings)` lets a provider short-circuit the resolver when its site indexes by AniList/MAL/Kitsu directly. `MegaPlayProvider` opts in (its `mediaId` _is_ the AniList ID). Providers can also declare `static malsyncSites: readonly string[]` (Mangadex, Mangapill, WeebCentral do).
+- `routes.ts`: 9 routes that decode params → call SDK → JSON-serialize.
+- `startServerV2({ port, sdk })`: new single-call server. `sdk` defaults to `createSdk()`.
+- `cli.ts`: process entry for `npx anime-sdk`. Reads `PORT`, `SOURCES_DISABLED` env vars.
+- Legacy `startServer({ providers, metaProviders, ... })`: old 1.x API, kept for backward compat.
 
-**5. Server (`src/server/index.ts`)**: `startServer({ providers, metaProviders?, port, proxy, cache, auth, proxyBase?, proxySignSecret?, proxyAllowedHosts? })`.
+### ID space
 
-Routes:
+Every `id` field on `Media`, `Episode`, `Chapter` is a base64url-encoded JSON token:
 
-- `GET /search` / `/content` / `/stream` / `/tracks` — content-provider operations.
-- `GET /meta/search` / `/meta/info` / `/meta/content` / `/meta/stream` / `/meta/tracks` / `/meta/browse` — metadata operations.
-- `GET /download/video` / `/download/manga/page` / `/download/manga/chapter` (+ `/progress` SSE variants) — file downloads.
-- `GET /proxy` (when `proxy: true`) — accepts `url`, `h` (base64-JSON headers), `ct` (Content-Type override), and `sig` (required when `proxySignSecret` is set — HMAC-SHA256 of `url` + optional `|h=<h>`, hex). The proxy rewriter signs URLs it emits automatically.
-- `GET /health` / `/openapi.json` — discovery.
+```json
+{ "v": 1, "t": "media"|"episode"|"chapter", "s": "sourceId", "r": "rawId", "m": {} }
+```
 
-The proxy base URL is derived from each incoming request's `Host` header (and `X-Forwarded-Proto` when present) so the SDK works behind reverse proxies without configuration. Override with `proxyBase`. SSRF risk is mitigated by `proxyAllowedHosts: string[]` (suffix-matched against the target's hostname).
+Consumers treat ids as opaque strings. The SDK decodes them internally to dispatch calls to the right source.
 
-`cache?: SdkCache` is an optional `{get, set}` interface (sync or async) that memoizes provider calls by namespaced keys: `search:<id>:<q>`, `content:<id>:<mid>`, `stream:<id>:<uid>:<lang>`, `tracks:<id>:<uid>:<lang>`, `meta:search:<id>:<q>`, `meta:info:<id>:<urn>`, `meta:content:<metaId>:<urn>:<contentId>`, `meta:stream:<...>`, `meta:tracks:<...>`, `meta:browse:<...>`, plus mapping keys `mapping:<metaProvider>:<rawId>:<contentProvider>`.
+Legacy URN helpers (`buildUrn`, `parseUrn`, `unwrapUrn`, `strictUnwrapUrn`, `buildTypedUrn`, `parseTypedUrn`) are in `src/internal/id.ts` and exported from `src/index.ts` for backward compat.
 
-`/tracks` returns **501** for providers without `fetchUnitTracks`. `/meta/browse` returns **501** when the meta provider doesn't implement the requested kind. The example `examples/server.mjs` wires a `new Map()` as the cache and registers all content providers plus `AnilistMeta`, `MalMeta`, `KitsuMeta` (each with a shared `MappingClient`). The example website (`examples/website/`) demonstrates every SDK feature — browse, meta search, full `IMediaMetadata` display (characters, staff, relations, recommendations, external links, streaming episodes), cross-provider episode resolution, and downloads. The example CLI (`examples/cli/`) is a React Ink TUI (`npm start` from `examples/cli/`) with browse, meta search, media info with tabs, provider selection, episode list, and stream resolution screens.
+### Extractors (`src/extractors/`)
+
+Stateless, take an embed URL + `HttpClient`, return `IVideoPayload[]`. Used internally by sources. `BloggerExtractor`, `Mp4UploadExtractor`, `GenericHlsExtractor`, `VidstreamingExtractor`.
 
 ## ESM import convention
 
@@ -83,27 +78,23 @@ The proxy base URL is derived from each incoming request's `Host` header (and `X
 
 ## Tests
 
-- **Unit tests** (`tests/*.test.ts`) cover pure-logic modules: `HttpClient`, `HlsUtils`, `DomRegistry`, extractor parsing, language inference, URN helpers, similarity matcher, rate limiter, retry policy.
-- **E2E tests** (`tests/e2e/*.test.ts`) are intentionally **not mocked**. Each searches a popular title, picks an episode, resolves the stream, and runs it through `captureStreamScreenshot`: which probes URLs with a Range GET (`Content-Type` + MP4 `ftyp` magic) to distinguish embed pages from raw video, fetches an HLS segment ~5s in, strips PNG-wrapped segments, and runs `ffmpeg` to extract a frame. Output lands in `scratch/screenshots/screenshot_<provider>.png` (gitignored). Assertion: the PNG is >1KB. Don't try to make these tests pass by mocking: the whole point is to catch upstream site changes.
-- Each E2E test sets `vitest` `timeout: 90000`: these are slow and that's expected.
-- `references/` (cloned source from `ani-cli`, `animdl`, `GoAnime`, `mov-cli`) is gitignored prior art for site-scraping logic; not part of the build or tests.
+- **Unit tests** (`tests/*.test.ts`): cover pure-logic modules — `HttpClient`, `HlsUtils`, `DomRegistry`, extractor parsing, language inference, URN helpers + new `encodeId`/`decodeId`, similarity matcher, rate limiter, retry policy, `ProgressiveResult`, `Registry`, `Sdk` smoke test, types/errors/config.
+- **E2E tests** (`tests/e2e/*.test.ts`): live, non-mocked. Each searches a popular title, picks an episode/chapter, resolves the stream/pages, and (for anime) runs `captureStreamScreenshot` to screenshot a real video frame. Assertion: the PNG is >1KB. The new source tests use `*Source` classes; a `streamToPayload()` helper converts `Stream` to `IVideoPayload` for the screenshot helper.
 
 ### Testing rules (do not negotiate)
 
-These rules exist because the only useful tests are the ones that catch real regressions.
+- **Never mock network requests.** No `vi.spyOn(http, 'get').mockResolvedValue(...)`, no `nock`, no fake `Response`.
+- **Never use fake/fixture data in place of a live call.**
+- **Never "gracefully skip" a test.** `if (!reachable) return;`, `it.skipIf(...)` etc. are forbidden.
+- **Tests must be real and pass.** Those are the only two states a test is allowed to be in.
+- **Stubs that replace `BaseProvider` are allowed only for testing pure SDK logic** (e.g. the registry's source-ranking) where the content provider's network behavior is genuinely orthogonal.
 
-- **Never mock network requests.** No `vi.spyOn(http, 'get').mockResolvedValue(...)`, no `nock`, no fake `Response`. If the test needs an HTTP server, spawn a real `http.createServer(...)` in `beforeAll` and tear it down in `afterAll`.
-- **Never use fake/fixture data in place of a live call.** No frozen JSON fixtures that pretend to be AniList/MAL/Kitsu responses. If you want to test a parser, run the parser against the live API.
-- **Never "gracefully skip" a test.** Patterns like `if (!reachable) return;`, `it.skipIf(...)`, or `if (!process.env.X) return;` are **forbidden** — they make a red test look green. If the upstream is unreachable from this network, the test must fail loudly. The fix is to either (a) make the upstream reachable, (b) pick a different upstream the runner can reach, or (c) delete the test. A skipped test is a lie.
-- **Tests must be real and pass.** Those are the only two states a test is allowed to be in. "Skipped because environment" is not a state.
-- **If a test depends on something flaky** (a slow site, a rate-limited API), make the test handle the flakiness via the SDK's own retry/timeout policy — not via skipping.
-- **Stubs that replace `BaseProvider` are allowed only for testing pure SDK logic** (e.g. the meta provider's episode-picking algorithm) where the content provider's network behavior is genuinely orthogonal. Stubs of `HttpClient` or external HTTP responses are not.
+## Source/extractor additions
 
-## Provider/extractor additions
+When adding a source:
 
-When adding a provider:
-
-- Extend `BaseProvider`, set `id` and `supportedTypes`, accept `HttpClient` in the constructor.
-- Compose existing extractors where possible; only add a new extractor if the embed format is genuinely novel.
-- Re-export from `src/index.ts`.
-- Add a live E2E test that resolves a real stream and screenshots it.
+- Implement the `Source` interface from `src/sources/base.ts`.
+- Use `encodeId`/`decodeId` from `src/internal/id.ts` for all external IDs.
+- Compose existing extractors where possible.
+- Re-register in `buildSources()` in `src/sdk.ts` with the source's `id`.
+- Add a live E2E test that resolves a real stream/pages and screenshots it.
