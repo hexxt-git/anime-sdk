@@ -82,18 +82,11 @@ export class MangadexSource implements Source {
   }
 
   async lookupByMapping(
-    mappings: Record<string, unknown>,
-    opts?: SourceCallOpts,
+    _mappings: Record<string, unknown>,
+    _opts?: SourceCallOpts,
   ): Promise<string | null> {
-    const mal = mappings.mal;
-    if (!mal) return null;
-    const url = `${MANGADEX_API}/manga?ids[]=${String(mal)}&contentRating[]=safe`;
-    try {
-      const res = await this.http.get(url, { signal: opts?.signal });
-      const data = (await res.json()) as any;
-      return data.data?.[0]?.id ?? null;
-    } catch {
-      return null;
-    }
+    // MangaDex doesn't have a native MAL/AniList ID lookup endpoint.
+    // Cross-source resolution requires a title search via the search() method.
+    return null;
   }
 }

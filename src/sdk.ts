@@ -117,12 +117,7 @@ export class Sdk {
     opts?: { signal?: AbortSignal; cursor?: string; limit?: number },
   ): Promise<List<Chapter>> {
     const m = typeof media === 'string' ? await this.info(media, opts) : media;
-    const kind = m.kind;
-    const sources = this.registry.sourcesFor(kind, 'chapters');
-    if (sources.length === 0) return { items: [] };
-    const mediaId = m.mappings.sources?.[sources[0].id];
-    if (!mediaId) return { items: [] };
-    return sources[0].chapters!(mediaId, {
+    return this.registry.mergeChapters(m, {
       signal: opts?.signal,
       cursor: opts?.cursor,
       limit: opts?.limit,

@@ -208,14 +208,12 @@ export class AllmangaSource implements Source {
   }
 
   async lookupByMapping(
-    mappings: Record<string, unknown>,
+    _mappings: Record<string, unknown>,
     _opts?: SourceCallOpts,
   ): Promise<string | null> {
-    const m = mappings as IMediaMappings;
-    if (m.anilist) {
-      const results = await this.search(String(m.anilist), 'anime', {});
-      return results[0]?.mappings.sources?.['allmanga'] ?? null;
-    }
+    // AllManga doesn't index by AniList/MAL ID natively.
+    // Cross-source resolution requires a title search (done externally
+    // by the registry when the caller provides a title via search results).
     return null;
   }
 
