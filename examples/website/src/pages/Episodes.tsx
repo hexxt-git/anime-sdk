@@ -6,40 +6,50 @@ export default function Episodes() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
 
-  const metaProvider = sp.get('meta') || '';
-  const metaId = sp.get('id') || '';
+  const mediaId = sp.get('id') || '';
+  const title = sp.get('title') || mediaId;
+  const kind = (sp.get('kind') ?? 'anime') as 'anime' | 'manga';
 
-  const provider = sp.get('provider') || '';
-  const mediaId = sp.get('mid') || '';
-
-  const title = sp.get('title') || mediaId || metaId;
-  const type = sp.get('type') || 'ANIME';
-
-  const isManga = type === 'MANGA';
+  const isManga = kind === 'manga';
   const unitLabel = isManga ? 'Ch' : 'EP';
 
-  const isMeta = !!(metaProvider && metaId && provider);
-
-  const { data, isFetching, isError, error } = useQuery<api.Episode[]>({
-    queryKey: isMeta
-      ? ['meta-content', metaProvider, metaId, provider]
-      : ['content', provider, mediaId],
-    queryFn: () =>
-      isMeta ? api.metaContent(metaProvider, metaId, provider) : api.content(provider, mediaId),
-    enabled: isMeta ? !!(metaProvider && metaId && provider) : !!(provider && mediaId),
+  const {
+    data: episodeList,
+    isFetching: epFetching,
+    isError: epError,
+    error: epErr,
+  } = useQuery<api.List<api.Episode>>({
+    queryKey: ['episodes', mediaId],
+    queryFn: () => api.mediaEpisodes(mediaId),
+    enabled: !isManga && !!mediaId,
   });
 
-  const goStream = (ep: api.Episode) => {
-    if (isMeta) {
+  const {
+    data: chapterList,
+    isFetching: chFetching,
+    isError: chError,
+    error: chErr,
+  } = useQuery<api.List<api.Chapter>>({
+    queryKey: ['chapters', mediaId],
+    queryFn: () => api.mediaChapters(mediaId),
+    enabled: isManga && !!mediaId,
+  });
+
+  const items = isManga ? chapterList?.items : episodeList?.items;
+  const isFetching = epFetching || chFetching;
+  const isError = epError || chError;
+  const error = epErr || chErr;
+
+  const goStream = (item: api.Episode | api.Chapter) => {
+    if (isManga) {
+      const ch = item as api.Chapter;
       navigate(
-        `/stream?provider=${provider}&uid=${encodeURIComponent(ep.id)}` +
-          `&title=${encodeURIComponent(title)}&ep=${encodeURIComponent(`${unitLabel}.${String(ep.number).padStart(3, '0')}`)}&mid=${encodeURIComponent(ep.id)}&type=${type}` +
-          `&meta=${metaProvider}&metaId=${encodeURIComponent(metaId)}`,
+        `/stream?chid=${encodeURIComponent(ch.id)}&title=${encodeURIComponent(title)}&mid=${encodeURIComponent(mediaId)}`,
       );
     } else {
+      const ep = item as api.Episode;
       navigate(
-        `/stream?provider=${provider}&uid=${encodeURIComponent(ep.id)}` +
-          `&title=${encodeURIComponent(title)}&ep=${encodeURIComponent(`${unitLabel}.${String(ep.number).padStart(3, '0')}`)}&mid=${encodeURIComponent(mediaId)}&type=${type}`,
+        `/stream?epid=${encodeURIComponent(ep.id)}&title=${encodeURIComponent(title)}&mid=${encodeURIComponent(mediaId)}`,
       );
     }
   };
@@ -48,20 +58,17 @@ export default function Episodes() {
     <div className="px-4">
       <div className="mt-5 mb-4">
         <div className="flex items-center gap-2">
-          {isMeta && (
-            <Link
-              to={`/media?meta=${metaProvider}&id=${encodeURIComponent(metaId)}`}
-              className="text-base-400 hover:text-base-600 text-[10px] transition-colors"
-            >
-              ← info
-            </Link>
-          )}
+          <Link
+            to={`/media?id=${encodeURIComponent(mediaId)}`}
+            className="text-base-400 hover:text-base-600 text-[10px] transition-colors"
+          >
+            ← info
+          </Link>
           <h1 className="text-base-900 text-base tracking-wide">{title}</h1>
         </div>
-        {data && (
+        {items && (
           <p className="text-base-400 mt-0.5 text-xs">
-            {data.length} {isManga ? 'chapters' : 'episodes'}
-            {isMeta && <span className="text-base-350 ml-2">via {provider}</span>}
+            {items.length} {isManga ? 'chapters' : 'episodes'}
           </p>
         )}
       </div>
@@ -69,59 +76,59 @@ export default function Episodes() {
       {isFetching && <p className="text-base-350 px-1 text-xs">fetching...</p>}
       {isError && <p className="px-1 text-xs text-red-900">{String(error)}</p>}
 
-      {data && (
+      {items && (
         <div className="border-base-200 max-h-[70vh] overflow-y-auto border-t">
-          {data.map((ep) => {
-            const hasThumb = !!ep.thumbnailUrl;
+          {items.map((item) => {
+            const ep = item as api.Episode;
+            const ch = item as api.Chapter;
+            const thumbnail = !isManga ? ep.thumbnail : undefined;
             return (
               <button
-                key={ep.id}
-                onClick={() => goStream(ep)}
+                key={item.id}
+                onClick={() => goStream(item)}
                 className="group border-base-150 hover:bg-base-150 flex w-full items-start gap-3 border-b py-2 text-left transition-colors"
               >
-                {hasThumb && (
+                {thumbnail && (
                   <img
-                    src={ep.thumbnailUrl!}
-                    alt={ep.title}
+                    src={thumbnail}
+                    alt={item.title}
                     loading="lazy"
                     className="h-14 w-24 shrink-0 object-cover opacity-80 group-hover:opacity-100"
                   />
                 )}
-                {!hasThumb && isMeta && <div className="bg-base-100 h-14 w-24 shrink-0" />}
 
                 <div className="min-w-0 flex-1 px-1">
                   <div className="flex items-center gap-2">
                     <span className="text-base-450 shrink-0 text-[10px]">
-                      {unitLabel}.{String(ep.number).padStart(3, '0')}
+                      {unitLabel}.{String(item.number).padStart(3, '0')}
                     </span>
-                    {ep.isFiller && (
+                    {!isManga && ep.filler && (
                       <span className="text-filler text-[9px] tracking-widest">FILLER</span>
                     )}
-                    {ep.isRecap && (
+                    {!isManga && ep.recap && (
                       <span className="text-recap text-[9px] tracking-widest">RECAP</span>
                     )}
-                    {ep.airDate && <span className="text-base-350 text-[9px]">{ep.airDate}</span>}
+                    {!isManga && ep.airDate && (
+                      <span className="text-base-350 text-[9px]">{ep.airDate}</span>
+                    )}
                   </div>
                   <p className="text-base-700 group-hover:text-base-900 mt-0.5 truncate text-xs transition-colors">
-                    {ep.title}
+                    {item.title}
                   </p>
-                  {ep.description && (
-                    <p className="text-base-400 mt-0.5 line-clamp-1 text-[10px]">
-                      {ep.description}
-                    </p>
-                  )}
                 </div>
 
-                <div className="flex shrink-0 gap-1 self-center px-2">
-                  {ep.availableLanguages?.map((l) => (
-                    <span
-                      key={l}
-                      className="border-base-250 text-base-450 border px-1.5 py-0.5 text-[10px] tracking-widest"
-                    >
-                      {l}
-                    </span>
-                  ))}
-                </div>
+                {!isManga && ep.languages && ep.languages.length > 0 && (
+                  <div className="flex shrink-0 gap-1 self-center px-2">
+                    {ep.languages.map((l) => (
+                      <span
+                        key={l}
+                        className="border-base-250 text-base-450 border px-1.5 py-0.5 text-[10px] tracking-widest"
+                      >
+                        {l}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </button>
             );
           })}
