@@ -1,45 +1,39 @@
 import { describe, it, expect } from 'vitest';
-import { HttpClient } from '../../src/transport/http.js';
-import { MangadexProvider } from '../../src/providers/MangadexProvider.js';
+import { HttpClient } from '../../src/internal/http.js';
+import { MangadexSource } from '../../src/sources/mangadex.js';
+import { decodeId } from '../../src/internal/id.js';
 
 describe('Mangadex E2E', () => {
-  it('searches, fetches all chapters, and resolves a stream with accessible images', async () => {
+  it('searches, fetches all chapters, and resolves pages with accessible images', async () => {
     const http = new HttpClient({ timeoutMs: 25000 });
-    const provider = new MangadexProvider(http);
+    const source = new MangadexSource(http);
 
-    const query = 'Frieren';
-    const searchResults = await provider.search(query);
-    expect(searchResults.length).toBeGreaterThan(0);
+    const results = await source.search('Frieren', 'manga', {});
+    expect(results.length).toBeGreaterThan(0);
 
-    const target = searchResults[0];
-    expect(target.providerId).toBe('mangadex');
-    console.log(`Mangadex selected: ${target.title} (${target.id})`);
+    const target = results[0];
+    const decoded = decodeId(target.id);
+    expect(decoded.s).toBe('mangadex');
+    console.log(`Mangadex selected: ${target.title.preferred} (${decoded.r})`);
 
-    const units = await provider.fetchContentUnits(target.id);
-    expect(units.length).toBeGreaterThan(0);
-    console.log(`Mangadex found ${units.length} chapters`);
+    const list = await source.chapters(decoded.r, {});
+    expect(list.items.length).toBeGreaterThan(0);
+    console.log(`Mangadex found ${list.items.length} chapters`);
 
-    // Verify pagination if it's a long series (like One Piece)
-    if (target.title.toLowerCase().includes('one piece')) {
-      expect(units.length).toBeGreaterThan(1000);
-    }
+    const ch1 = list.items[0];
+    const pages = await source.pages(ch1.id, {});
+    expect(pages.pages.length).toBeGreaterThan(0);
 
-    const ep1 = units[0];
-    const stream = await provider.resolveStream(ep1.id);
-    expect(stream.type).toBe('manga');
-    if (stream.type !== 'manga') return;
-
-    expect(stream.pages.imageUrls.length).toBeGreaterThan(0);
-
-    // Verify image accessibility
-    const imgUrl = stream.pages.imageUrls[0];
-    const imgRes = await http.get(imgUrl, { headers: stream.pages.headers });
+    const imgUrl = pages.pages[0].url;
+    const imgRes = await http.get(imgUrl, {
+      headers: { Referer: 'https://mangadex.org/' },
+    });
     expect(imgRes.status).toBe(200);
     const contentType = imgRes.headers.get('content-type');
     expect(contentType).toMatch(/^image\//);
 
     console.log(
-      `Mangadex resolved ${stream.pages.imageUrls.length} pages; top: ${imgUrl.slice(0, 80)} (${contentType})`,
+      `Mangadex resolved ${pages.pages.length} pages; top: ${imgUrl.slice(0, 80)} (${contentType})`,
     );
   }, 90000);
 });

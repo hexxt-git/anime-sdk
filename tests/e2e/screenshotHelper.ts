@@ -2,6 +2,23 @@ import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { IVideoPayload } from '../../src/types/index.js';
+import type { Stream } from '../../src/types.js';
+
+export function streamToPayload(s: Stream): IVideoPayload {
+  return {
+    sourceUrl: s.url,
+    isHLS: s.isHls,
+    quality: (s.qualities[0]?.label ?? 'auto') as IVideoPayload['quality'],
+    language: s.language,
+    headers: s.headers,
+    subtitles: s.subtitles?.map((sub) => ({
+      url: sub.url,
+      language: sub.language,
+      label: sub.label,
+      format: sub.format,
+    })),
+  };
+}
 
 // ─── Small URL/parse helpers ─────────────────────────────────────────────────
 
