@@ -1,6 +1,7 @@
 import type { Source, SourceCallOpts } from './sources/base.js';
 import type { Media, Episode, List, SourceInfo } from './types.js';
 import { HealthTracker } from './health.js';
+import { createProgressiveResult, type ProgressiveResult } from './progressive.js';
 
 export class Registry {
   private sources: Source[] = [];
@@ -16,30 +17,26 @@ export class Registry {
     );
   }
 
-  async *fanOutSearch(
+  fanOutSearch(
     query: string,
     kind: 'anime' | 'manga',
     opts: SourceCallOpts,
-  ): AsyncIterable<Media> {
+  ): ProgressiveResult<Media> {
     const sources = this.sourcesFor(kind, 'search');
-    const pending = sources.map(async (src) => {
-      const t0 = Date.now();
-      try {
-        const results = await src.search!(query, kind, opts);
-        this.health.record(src.id, true, Date.now() - t0);
-        return results;
-      } catch {
-        this.health.record(src.id, false, Date.now() - t0);
-        return [] as Media[];
-      }
-    });
-
-    const settled = await Promise.all(pending);
-    for (const batch of settled) {
-      for (const item of batch) {
-        yield item;
-      }
-    }
+    return createProgressiveResult<Media>(
+      sources.map((src) => async (push, signal) => {
+        const t0 = Date.now();
+        try {
+          const results = await src.search!(query, kind, { signal });
+          this.health.record(src.id, true, Date.now() - t0);
+          for (const item of results) push(item);
+        } catch (e) {
+          this.health.record(src.id, false, Date.now() - t0);
+          throw e;
+        }
+      }),
+      opts.signal,
+    );
   }
 
   async mergeEpisodes(
