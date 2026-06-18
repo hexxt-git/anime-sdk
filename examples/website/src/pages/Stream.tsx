@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import Hls from 'hls.js';
 import * as api from '../api';
-
-// ─── Download button with SSE progress ────────────────────────────────────────
+import { Combobox } from '../components/ui/Select';
+import { SectionCollapsible } from '../components/ui/Collapsible';
 
 type DownloadPhase = 'idle' | 'active' | 'done' | 'error';
 
@@ -86,7 +86,7 @@ function DownloadButton({
     return (
       <button
         onClick={start}
-        className="text-xs tracking-widest text-[#444] transition-colors hover:text-[#888]"
+        className="text-base-400 hover:text-base-600 text-xs tracking-widest transition-colors"
       >
         {type === 'manga' ? 'DOWNLOAD ZIP' : 'DOWNLOAD'}
       </button>
@@ -94,7 +94,7 @@ function DownloadButton({
   }
 
   if (phase === 'done') {
-    return <span className="text-xs tracking-widest text-[#2a6]">SAVED</span>;
+    return <span className="text-success text-xs tracking-widest">SAVED</span>;
   }
 
   if (phase === 'error') {
@@ -102,20 +102,19 @@ function DownloadButton({
       <button
         onClick={() => setPhase('idle')}
         title={label}
-        className="text-xs tracking-widest text-red-900 transition-colors hover:text-red-700"
+        className="text-danger text-xs tracking-widest transition-colors hover:text-red-700"
       >
         FAILED ✕
       </button>
     );
   }
 
-  // active
   return (
     <div className="flex items-center gap-3">
-      <span className="max-w-[200px] truncate text-xs text-[#555]">{label}</span>
+      <span className="text-base-450 max-w-[200px] truncate text-xs">{label}</span>
       <button
         onClick={start}
-        className="text-xs tracking-widest text-[#333] transition-colors hover:text-red-900"
+        className="text-base-350 hover:text-danger text-xs tracking-widest transition-colors"
       >
         CANCEL
       </button>
@@ -129,9 +128,6 @@ function Player({
   langUI,
 }: {
   stream: api.VideoStream;
-  /** Subtitle tracks to render — the caller hands these in so the selector can
-   *  reflect what the SDK actually advertised for this unit (via `/tracks` and
-   *  falling back to `stream.subtitles`). */
   subtitles: api.SubtitleTrack[];
   langUI?: React.ReactNode;
 }) {
@@ -140,8 +136,6 @@ function Player({
   const [hlsSubTracks, setHlsSubTracks] = useState<{ id: number; name: string; lang: string }[]>(
     [],
   );
-  // -1 = off; 0..N-1 = external <track>; 1000+i = HLS track i (kept distinct so the
-  // two source sets don't collide).
   const [activeSub, setActiveSub] = useState<number>(-1);
   const hlsRef = useRef<Hls | undefined>(undefined);
   const externalSubs = subtitles;
@@ -168,7 +162,6 @@ function Player({
             lang: t.lang ?? '',
           }));
           setHlsSubTracks(tracks);
-          // Only auto-enable an HLS track if we don't already have an external one.
           if (tracks.length > 0 && externalSubs.length === 0) {
             hls!.subtitleTrack = 0;
             setActiveSub(1000);
@@ -198,8 +191,6 @@ function Player({
     };
   }, [stream.sourceUrl, stream.isHLS, externalSubs.length]);
 
-  // Apply external-track selection imperatively: <track default> alone doesn't
-  // reliably enable a track across browsers, and toggling needs runtime control.
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
@@ -220,8 +211,8 @@ function Player({
 
   if (playerError) {
     return (
-      <div className="flex aspect-video items-center justify-center border border-[#1e1e1e] bg-[#0d0d0d]">
-        <p className="text-xs text-[#444]">{playerError}</p>
+      <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
+        <p className="text-base-400 text-xs">{playerError}</p>
       </div>
     );
   }
@@ -232,7 +223,7 @@ function Player({
         ref={ref}
         controls
         crossOrigin="anonymous"
-        className="mb-4 aspect-video w-full border border-[#1e1e1e] bg-black"
+        className="border-base-200 bg-base-0 mb-4 aspect-video w-full border"
       >
         {externalSubs.map((s, i) => (
           <track
@@ -246,27 +237,17 @@ function Player({
       </video>
       {langUI}
       {hasSubtitleUI && (
-        <div className="flex items-center gap-2 border-t border-[#1a1a1a] px-1 py-2">
-          <span className="text-xs tracking-widest text-[#444]">SUB</span>
-          <select
-            value={activeSub}
-            onChange={(e) => selectSub(Number(e.target.value))}
-            className="cursor-pointer bg-transparent text-xs text-white outline-none"
-          >
-            <option value={-1} className="bg-[#0f0f0f]">
-              off
-            </option>
-            {externalSubs.map((s, i) => (
-              <option key={`ext-${i}`} value={i} className="bg-[#0f0f0f]">
-                {s.label}
-              </option>
-            ))}
-            {hlsSubTracks.map((t) => (
-              <option key={`hls-${t.id}`} value={1000 + t.id} className="bg-[#0f0f0f]">
-                {t.name}
-              </option>
-            ))}
-          </select>
+        <div className="border-base-200 flex items-center gap-2 border-t px-1 py-2">
+          <span className="text-base-400 text-xs tracking-widest">SUB</span>
+          <Combobox
+            value={String(activeSub)}
+            onValueChange={(v) => selectSub(Number(v))}
+            options={[
+              { value: '-1', label: 'off' },
+              ...externalSubs.map((s, i) => ({ value: String(i), label: s.label })),
+              ...hlsSubTracks.map((t) => ({ value: String(1000 + t.id), label: t.name })),
+            ]}
+          />
         </div>
       )}
     </div>
@@ -275,7 +256,7 @@ function Player({
 
 function MangaReader({ pages }: { pages: api.MangaStream }) {
   return (
-    <div className="mb-4 flex flex-col items-center gap-4 bg-black">
+    <div className="bg-base-0 mb-4 flex flex-col items-center gap-4">
       {pages.imageUrls.map((url, i) => (
         <img
           key={i}
@@ -299,20 +280,17 @@ export default function Stream() {
   const mediaId = sp.get('mid') || '';
   const epLabel = sp.get('ep') || '';
   const type = sp.get('type') || 'ANIME';
+  const metaProvider = sp.get('meta') || '';
+  const metaId = sp.get('metaId') || '';
 
   const isManga = type === 'MANGA';
   const unitLabel = isManga ? 'CHAPTERS' : 'EPISODES';
   const unitPrefix = isManga ? 'Chapter' : 'EP';
 
-  // Language lives in component state — never in the URL. The episode list is
-  // language-agnostic; only the playback resolution needs a language pick.
   const [lang, setLang] = useState<api.Lang>('sub');
   const [activeIdx, setActiveIdx] = useState(0);
   const [showEpisodes, setShowEpisodes] = useState(false);
 
-  // Episode list — language-agnostic, one call. Each episode advertises its
-  // own `availableLanguages`; we use the current episode's list to decide
-  // which LANG buttons make sense.
   const { data: episodes } = useQuery<api.Episode[]>({
     queryKey: ['content', provider, mediaId],
     queryFn: () => api.content(provider, mediaId),
@@ -325,8 +303,6 @@ export default function Stream() {
   const currentEpisode = currentIdx >= 0 ? episodes![currentIdx] : null;
   const availableLangs = currentEpisode?.availableLanguages ?? ['sub'];
 
-  // If our current `lang` isn't one this episode supports, drop to the first
-  // language that *is* supported.
   useEffect(() => {
     if (availableLangs.length > 0 && !availableLangs.includes(lang)) {
       setLang(availableLangs[0]);
@@ -347,29 +323,44 @@ export default function Stream() {
   const nextEp =
     currentIdx >= 0 && currentIdx < (episodes?.length ?? 0) - 1 ? episodes![currentIdx + 1] : null;
 
-  const goEpisode = (ep: api.Episode) =>
-    navigate(
+  const goEpisode = (ep: api.Episode) => {
+    const base =
       `/stream?provider=${provider}&uid=${encodeURIComponent(ep.id)}` +
-        `&title=${encodeURIComponent(title)}&ep=${encodeURIComponent(`${unitPrefix}.${String(ep.number).padStart(3, '0')}`)}&mid=${encodeURIComponent(mediaId)}&type=${type}`,
+      `&title=${encodeURIComponent(title)}&ep=${encodeURIComponent(`${unitPrefix}.${String(ep.number).padStart(3, '0')}`)}&mid=${encodeURIComponent(mediaId)}&type=${type}`;
+    navigate(
+      metaProvider && metaId
+        ? `${base}&meta=${metaProvider}&metaId=${encodeURIComponent(metaId)}`
+        : base,
     );
+  };
 
-  // Reset active source when stream changes
+  const infoHref =
+    metaProvider && metaId ? `/media?meta=${metaProvider}&id=${encodeURIComponent(metaId)}` : null;
+
   useEffect(() => {
     setActiveIdx(0);
   }, [unitId, lang]);
 
   return (
     <div className="px-4">
+      {infoHref && (
+        <div className="text-base-400 mt-4 flex items-center gap-2 text-[10px]">
+          <Link to={infoHref} className="hover:text-base-600 transition-colors">
+            ← {title}
+          </Link>
+          {epLabel && <span className="text-base-300">/ {epLabel}</span>}
+        </div>
+      )}
       <div className="mt-5">
         {isFetching && (
-          <div className="flex aspect-video items-center justify-center border border-[#1e1e1e] bg-[#0d0d0d]">
-            <p className="text-xs tracking-widest text-[#333]">
+          <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
+            <p className="text-base-350 text-xs tracking-widest">
               resolving {isManga ? 'pages' : 'stream'}...
             </p>
           </div>
         )}
         {isError && (
-          <div className="flex aspect-video items-center justify-center border border-[#1e1e1e] bg-[#0d0d0d]">
+          <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
             <p className="text-xs text-red-900">{String(error)}</p>
           </div>
         )}
@@ -380,15 +371,13 @@ export default function Stream() {
             subtitles={subtitles}
             langUI={
               availableLangs.length > 1 && (
-                <div className="flex items-center gap-2 border-t border-[#1a1a1a] px-1 py-2">
-                  <span className="text-xs tracking-widest text-[#444]">LANG</span>
+                <div className="border-base-200 flex items-center gap-2 border-t px-1 py-2">
+                  <span className="text-base-400 text-xs tracking-widest">LANG</span>
                   {availableLangs.map((l) => (
                     <button
                       key={l}
                       onClick={() => setLang(l)}
-                      className={`text-xs tracking-widest uppercase transition-colors ${
-                        lang === l ? 'text-white' : 'text-[#444] hover:text-[#888]'
-                      }`}
+                      className={`text-xs tracking-widest uppercase transition-colors ${lang === l ? 'text-base-900' : 'text-base-400 hover:text-base-700'}`}
                     >
                       {l}
                     </button>
@@ -401,19 +390,17 @@ export default function Stream() {
         {data?.type === 'manga' && data.pages && (
           <>
             <MangaReader pages={data.pages} />
-            <div className="flex items-center justify-end border-t border-[#1a1a1a] px-1 py-2">
+            <div className="border-base-200 flex items-center justify-end border-t px-1 py-2">
               <DownloadButton provider={provider} unitId={unitId} language={lang} type="manga" />
             </div>
             {availableLangs.length > 1 && (
-              <div className="flex items-center gap-2 border-t border-[#1a1a1a] px-1 py-2">
-                <span className="text-xs tracking-widest text-[#444]">LANG</span>
+              <div className="border-base-200 flex items-center gap-2 border-t px-1 py-2">
+                <span className="text-base-400 text-xs tracking-widest">LANG</span>
                 {availableLangs.map((l) => (
                   <button
                     key={l}
                     onClick={() => setLang(l)}
-                    className={`text-xs tracking-widest uppercase transition-colors ${
-                      lang === l ? 'text-white' : 'text-[#444] hover:text-[#888]'
-                    }`}
+                    className={`text-xs tracking-widest uppercase transition-colors ${lang === l ? 'text-base-900' : 'text-base-400 hover:text-base-700'}`}
                   >
                     {l}
                   </button>
@@ -424,29 +411,28 @@ export default function Stream() {
         )}
       </div>
 
-      {/* Episode navigation */}
       {episodes && (
-        <div className="mb-0 border-t border-[#1a1a1a]">
+        <div className="border-base-200 mb-0 border-t">
           <div className="flex items-center justify-between px-1 py-2">
             <button
               onClick={() => setShowEpisodes((v) => !v)}
-              className="text-xs tracking-widest text-[#444] transition-colors hover:text-[#777]"
+              className="text-base-400 hover:text-base-550 text-xs tracking-widest transition-colors"
             >
-              {unitLabel} <span className="text-[#333]">({episodes.length})</span>{' '}
+              {unitLabel} <span className="text-base-350">({episodes.length})</span>{' '}
               {showEpisodes ? '▲' : '▼'}
             </button>
             <div className="flex gap-3">
               <button
                 disabled={!prevEp}
                 onClick={() => prevEp && goEpisode(prevEp)}
-                className="text-xs text-[#444] transition-colors hover:text-[#aaa] disabled:cursor-default disabled:text-[#252525]"
+                className="text-base-400 hover:text-base-700 disabled:text-base-300 text-xs transition-colors disabled:cursor-default"
               >
                 ← PREV
               </button>
               <button
                 disabled={!nextEp}
                 onClick={() => nextEp && goEpisode(nextEp)}
-                className="text-xs text-[#444] transition-colors hover:text-[#aaa] disabled:cursor-default disabled:text-[#252525]"
+                className="text-base-400 hover:text-base-700 disabled:text-base-300 text-xs transition-colors disabled:cursor-default"
               >
                 NEXT →
               </button>
@@ -454,22 +440,22 @@ export default function Stream() {
           </div>
 
           {showEpisodes && (
-            <div className="max-h-64 overflow-y-auto border-t border-[#141414]">
+            <div className="border-base-150 max-h-64 overflow-y-auto border-t">
               {episodes.map((ep) => {
                 const isCurrent = ep.number === currentEpNum;
                 return (
                   <button
                     key={ep.id}
                     onClick={() => goEpisode(ep)}
-                    className={`flex w-full items-center justify-between border-b border-[#0f0f0f] px-2 py-2 text-left transition-colors hover:bg-[#111] ${isCurrent ? 'bg-[#0f0f0f]' : ''}`}
+                    className={`border-base-100 hover:bg-base-150 flex w-full items-center justify-between border-b px-2 py-2 text-left transition-colors ${isCurrent ? 'bg-base-100' : ''}`}
                   >
                     <span
-                      className={`mr-4 shrink-0 text-xs ${isCurrent ? 'text-white' : 'text-[#444]'}`}
+                      className={`mr-4 shrink-0 text-xs ${isCurrent ? 'text-base-900' : 'text-base-400'}`}
                     >
                       {unitPrefix}.{String(ep.number).padStart(3, '0')}
                     </span>
                     <span
-                      className={`flex-1 truncate text-xs ${isCurrent ? 'text-[#bbb]' : 'text-[#333]'}`}
+                      className={`flex-1 truncate text-xs ${isCurrent ? 'text-base-750' : 'text-base-350'}`}
                     >
                       {ep.title}
                     </span>
@@ -481,76 +467,141 @@ export default function Stream() {
         </div>
       )}
 
-      {/* Source selector */}
-      {streams.length > 0 && (
-        <div className="border-t border-[#1a1a1a]">
-          <div className="flex items-center justify-between px-1 py-2">
-            <span className="text-xs tracking-widest text-[#444]">
-              SOURCES <span className="text-[#333]">({streams.length})</span>
-            </span>
-            <DownloadButton provider={provider} unitId={unitId} language={lang} type="video" />
-          </div>
-          {streams.map((s, i) => {
-            let displayUrl = s.sourceUrl;
-            try {
-              const u = new URL(s.sourceUrl);
-              if (u.pathname === '/proxy' && u.searchParams.has('url')) {
-                const targetUrl = new URL(u.searchParams.get('url')!);
-                displayUrl = targetUrl.hostname;
-              } else {
-                displayUrl = u.hostname;
-              }
-            } catch {}
+      {streams.length > 0 &&
+        (streams.length > 2 ? (
+          <SectionCollapsible label="Sources" count={streams.length} defaultOpen={true}>
+            <div className="flex items-center justify-end pb-2">
+              <DownloadButton provider={provider} unitId={unitId} language={lang} type="video" />
+            </div>
+            {streams.map((s, i) => {
+              let displayUrl = s.sourceUrl;
+              try {
+                const u = new URL(s.sourceUrl);
+                if (u.pathname === '/proxy' && u.searchParams.has('url')) {
+                  const targetUrl = new URL(u.searchParams.get('url')!);
+                  displayUrl = targetUrl.hostname;
+                } else {
+                  displayUrl = u.hostname;
+                }
+              } catch {}
 
-            return (
-              <div
-                key={i}
-                className={`group flex w-full items-start gap-3 border-b border-[#141414] px-2 py-3 transition-colors hover:bg-[#111] ${i === activeIdx ? 'bg-[#0f0f0f]' : ''}`}
-              >
-                <button
-                  onClick={() => setActiveIdx(i)}
-                  className="flex min-w-0 flex-1 items-start gap-3 text-left"
+              return (
+                <div
+                  key={i}
+                  className={`group border-base-150 hover:bg-base-150 flex w-full items-start gap-3 border-b px-2 py-3 transition-colors ${i === activeIdx ? 'bg-base-100' : ''}`}
                 >
-                  <span
-                    className={`mt-0.5 shrink-0 text-xs ${i === activeIdx ? 'text-white' : 'text-[#333]'}`}
+                  <button
+                    onClick={() => setActiveIdx(i)}
+                    className="flex min-w-0 flex-1 items-start gap-3 text-left"
                   >
-                    {i === activeIdx ? '●' : '○'}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-1 text-xs text-[#ccc]">
-                      Server {i + 1}
-                      <span className="ml-2 text-[#666]">
-                        [{s.isHLS ? 'HLS' : 'MP4'}] {s.quality}
-                        {s.language ? `  ${s.language}` : ''}
-                      </span>
-                    </div>
-                    <div
-                      className={`truncate text-xs ${i === activeIdx ? 'text-[#4a9eff]' : 'text-[#444] group-hover:text-[#666]'}`}
+                    <span
+                      className={`mt-0.5 shrink-0 text-xs ${i === activeIdx ? 'text-base-900' : 'text-base-350'}`}
                     >
-                      {displayUrl}
+                      {i === activeIdx ? '●' : '○'}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-base-800 mb-1 text-xs">
+                        Server {i + 1}
+                        <span className="text-base-500 ml-2">
+                          [{s.isHLS ? 'HLS' : 'MP4'}] {s.quality}
+                          {s.language ? `  ${s.language}` : ''}
+                        </span>
+                      </div>
+                      <div
+                        className={`truncate text-xs ${i === activeIdx ? 'text-accent' : 'text-base-400 group-hover:text-base-500'}`}
+                      >
+                        {displayUrl}
+                      </div>
                     </div>
-                  </div>
-                </button>
-                <a
-                  href={s.sourceUrl}
-                  download={!s.isHLS}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={
-                    s.isHLS
-                      ? 'Open HLS manifest (use downloadVideo() to save as MP4)'
-                      : 'Download MP4'
-                  }
-                  onClick={(e) => e.stopPropagation()}
-                  className="mt-0.5 shrink-0 text-xs text-[#333] transition-colors hover:text-[#888]"
+                  </button>
+                  <a
+                    href={s.sourceUrl}
+                    download={!s.isHLS}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={
+                      s.isHLS
+                        ? 'Open HLS manifest (use downloadVideo() to save as MP4)'
+                        : 'Download MP4'
+                    }
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-base-350 hover:text-base-600 mt-0.5 shrink-0 text-xs transition-colors"
+                  >
+                    {s.isHLS ? '↗' : '↓'}
+                  </a>
+                </div>
+              );
+            })}
+          </SectionCollapsible>
+        ) : (
+          <div className="border-base-200 border-t">
+            <div className="flex items-center justify-between px-1 py-2">
+              <span className="text-base-400 text-xs tracking-widest">
+                SOURCES <span className="text-base-350">({streams.length})</span>
+              </span>
+              <DownloadButton provider={provider} unitId={unitId} language={lang} type="video" />
+            </div>
+            {streams.map((s, i) => {
+              let displayUrl = s.sourceUrl;
+              try {
+                const u = new URL(s.sourceUrl);
+                if (u.pathname === '/proxy' && u.searchParams.has('url')) {
+                  const targetUrl = new URL(u.searchParams.get('url')!);
+                  displayUrl = targetUrl.hostname;
+                } else {
+                  displayUrl = u.hostname;
+                }
+              } catch {}
+
+              return (
+                <div
+                  key={i}
+                  className={`group border-base-150 hover:bg-base-150 flex w-full items-start gap-3 border-b px-2 py-3 transition-colors ${i === activeIdx ? 'bg-base-100' : ''}`}
                 >
-                  {s.isHLS ? '↗' : '↓'}
-                </a>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                  <button
+                    onClick={() => setActiveIdx(i)}
+                    className="flex min-w-0 flex-1 items-start gap-3 text-left"
+                  >
+                    <span
+                      className={`mt-0.5 shrink-0 text-xs ${i === activeIdx ? 'text-base-900' : 'text-base-350'}`}
+                    >
+                      {i === activeIdx ? '●' : '○'}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-base-800 mb-1 text-xs">
+                        Server {i + 1}
+                        <span className="text-base-500 ml-2">
+                          [{s.isHLS ? 'HLS' : 'MP4'}] {s.quality}
+                          {s.language ? `  ${s.language}` : ''}
+                        </span>
+                      </div>
+                      <div
+                        className={`truncate text-xs ${i === activeIdx ? 'text-accent' : 'text-base-400 group-hover:text-base-500'}`}
+                      >
+                        {displayUrl}
+                      </div>
+                    </div>
+                  </button>
+                  <a
+                    href={s.sourceUrl}
+                    download={!s.isHLS}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title={
+                      s.isHLS
+                        ? 'Open HLS manifest (use downloadVideo() to save as MP4)'
+                        : 'Download MP4'
+                    }
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-base-350 hover:text-base-600 mt-0.5 shrink-0 text-xs transition-colors"
+                  >
+                    {s.isHLS ? '↗' : '↓'}
+                  </a>
+                </div>
+              );
+            })}
+          </div>
+        ))}
     </div>
   );
 }
