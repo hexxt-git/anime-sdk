@@ -1,49 +1,41 @@
 ---
-title: MegaPlay
-description: How to use the MegaPlayProvider in anime-sdk.
+title: megaplay
+description: Anime playback source for megaplay.buzz using AniList for search and native ID mapping.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+`MegaPlaySource` uses AniList's GraphQL endpoint for search (returning the same AniList IDs it uses natively), then resolves streams against MegaPlay's mapping endpoints. Sub and dub with VTT subtitle tracks.
 
-The `MegaPlayProvider` is a universal resolver that connects to `megaplay.buzz`. Unlike other providers that scrape specific anime sites, MegaPlay uses **AniList GraphQL** for search and resolves streams using official AniList IDs.
+## Capabilities
+
+- `search`, `episodes`, `stream`, `mapping`
 
 ## Usage
 
 ```ts
-import { HttpClient, MegaPlayProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const provider = new MegaPlayProvider(http);
+const sdk = createSdk({ sources: ['anilist', 'megaplay'] });
 
-// Searches using AniList GraphQL
-const results = await provider.search('Naruto');
-const units = await provider.fetchContentUnits(results[0].id);
-
-// Resolves using MegaPlay's direct AniList mapping
-const stream = await provider.resolveStream(units[0].id, 'sub');
+const results = await sdk.search('Frieren', { kind: 'anime' });
+const { items: episodes } = await sdk.episodes(results[0]);
+const stream = await sdk.stream(episodes[0], { language: 'sub' });
+// stream.subtitles → VTT subtitle tracks when available
 ```
 
-## Characteristics
+## Native ID mapping
 
-| Feature       | Details                        |
-| ------------- | ------------------------------ |
-| **Catalog**   | Anime (AniList)                |
-| **Languages** | `sub`, `dub`                   |
-| **Subtitles** | yes (Integrated in HLS)        |
-| **Method**    | AniList GraphQL + ID Mapping   |
-| **HLS**       | Single quality with VTT tracks |
+MegaPlay indexes its catalogue by AniList ID — `lookupByMapping({ anilist: 154587 })` immediately returns `'154587'` without a fuzzy search. This makes cross-source resolution instant when the metadata record includes an AniList ID.
 
-<Aside type="caution">
-  MegaPlay does not have a 1:1 mapping for every show on AniList. If a stream fails to resolve, it
-  likely means the show hasn't been indexed by MegaPlay yet.
-</Aside>
+## Stream resolution
 
-## Configuration
+1. Fetch the embed page at `megaplay.buzz/stream/ani/{anilistId}/{epNum}/{language}`
+2. Extract the `fileId` from `<title>File XXXXX - MegaPlay</title>`
+3. Fetch sources from `/stream/getSources?id={fileId}`
+4. Return the `sources.file` URL
 
-You can override the base URL if the host moves to a new domain:
+## Supported languages
 
-```ts
-const provider = new MegaPlayProvider(http, {
-  baseUrl: 'https://megaplay.buzz',
-});
-```
+| Language | Support                |
+| -------- | ---------------------- |
+| `'sub'`  | Full                   |
+| `'dub'`  | Full (where available) |

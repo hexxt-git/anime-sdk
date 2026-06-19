@@ -1,83 +1,29 @@
 ---
-title: GogoanimeProvider
-description: Provider for anineko.to that scrapes episode pages and extracts video streams from server buttons.
+title: gogoanime
+description: Anime playback source for anineko.to — HTML scraping with HLS stream extraction.
 ---
 
-`GogoanimeProvider` scrapes `anineko.to` (the current Gogoanime mirror). It parses anime cards from search results, extracts episode lists from watch pages, and pulls stream URLs from `data-video` attributes on server buttons.
+`GogoanimeSource` scrapes `anineko.to`, extracts video server buttons from episode pages, then uses `GenericHlsExtractor` to resolve direct HLS URLs. Useful fallback for titles AllManga is missing.
 
-## Constructor
+## Capabilities
 
-```ts
-import { HttpClient, GogoanimeProvider } from 'anime-sdk';
-
-const provider = new GogoanimeProvider(new HttpClient({ timeoutMs: 10_000 }));
-
-// Override the base URL if the site has moved:
-const provider = new GogoanimeProvider(client, {
-  baseUrl: 'https://anineko.to',
-});
-```
-
-```ts
-interface GogoanimeOptions {
-  baseUrl?: string; // defaults to 'https://anineko.to'
-}
-```
+- `search`, `episodes`, `stream`
 
 ## Usage
 
 ```ts
-import { HttpClient, GogoanimeProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const provider = new GogoanimeProvider(new HttpClient({ timeoutMs: 10_000 }));
+const sdk = createSdk({ sources: ['anilist', 'gogoanime'] });
 
-// Search
-const shows = await provider.search('One Piece');
-// shows[0] => { id: '/watch/one-piece', title: 'One Piece',
-//               thumbnailUrl: 'https://...', catalogType: 'ANIME',
-//               providerId: 'gogoanime' }
-
-// Episodes: language-agnostic; gogoanime is sub only.
-const eps = await provider.fetchContentUnits(shows[0].id);
-// eps[0] => { id: '/watch/one-piece/ep-1', title: 'Episode 1 - I'm Luffy!',
-//             number: 1, availableLanguages: ['sub'] }
-
-// Stream
-const result = await provider.resolveStream(eps[0].id);
-if (result.type === 'video') {
-  for (const s of result.streams) {
-    console.log(s.sourceUrl, s.quality);
-    // → https://... 'auto' | '720p' | '1080p' | '360p'
-  }
-}
+const results = await sdk.search('One Piece', { kind: 'anime' });
+const { items: episodes } = await sdk.episodes(results[0]);
+const stream = await sdk.stream(episodes[0]);
+// stream.isHls → true
 ```
-
-## Supported languages
-
-| Language | Support               |
-| -------- | --------------------- |
-| `'sub'`  | Full                  |
-| `'dub'`  | Falls back to `'sub'` |
-| `'raw'`  | Falls back to `'sub'` |
-
-The language parameter to `resolveStream` is accepted but ignored. All content units report `availableLanguages: ['sub']`.
-
-## ID formats
-
-- **Media ID** (from `search`): a URL path, e.g. `/watch/one-piece`
-- **Content unit ID** (from `fetchContentUnits`): a full episode path, e.g. `/watch/one-piece/ep-1`
-
-`fetchContentUnits` normalises its `mediaId` argument: it strips episode suffixes and prepends `/watch/` if needed, so passing a content unit ID back is handled gracefully.
-
-## How it works
-
-1. **Search**: GET `{baseUrl}/browser?keyword={query}`. Parses `article.nv-anime-card` elements: the `<a>` inside `h3.nv-anime-title` provides the ID and title; `<img>` provides the thumbnail.
-2. **Episodes**: GET the watch page. Parses `article.nv-info-episode-item` elements. Each `<a.nv-info-episode-main>` has an `href` (the content unit ID); the episode number is extracted from the `ep-N` segment of the path.
-3. **Stream resolution**: GET the episode page. Parses `button.nv-server-btn` elements to collect embed URLs from `data-video` attributes. Each URL is passed sequentially to `GenericHlsExtractor`, which fetches the embed page and scans it for a `.m3u8` URL. Returns on the first successful extraction.
-
-A User-Agent header (`Chrome/120`) is set automatically on the `HttpClient` if one isn't already configured: anineko.to rejects requests without one.
 
 ## Notes
 
-- `resolveStream` runs embed URLs through `GenericHlsExtractor` sequentially and returns on the first successful extraction, so resolution is fast (~0.5s) even when multiple server buttons are present. Falls back to raw embed URLs if nothing resolves.
-- If anineko.to changes domain, pass the new URL via `options.baseUrl`.
+- Sub only.
+- Stream resolution: scrapes `button.nv-server-btn[data-video]` from the episode page, tries each server with `GenericHlsExtractor`, stops on first success.
+- Dub variants have `-dub` in the show slug — the SDK handles this automatically.

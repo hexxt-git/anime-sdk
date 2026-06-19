@@ -1,39 +1,37 @@
 ---
-title: Anikoto
-description: How to use the AnikotoProvider in anime-sdk.
+title: anikoto
+description: Anime playback source for anikototv.to with sub/dub and VTT subtitles via MegaPlay embeds.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+`AnikotoSource` combines `anikototv.to` search with `anikotoapi.site` for episode metadata. Resolves streams via MegaPlay's embed API. Sub and dub, with VTT subtitle tracks.
 
-The `AnikotoProvider` connects to `anikototv.to` (anikoto.cz). It is an excellent provider for both **subbed** and **dubbed** content, offering high-quality HLS streams with integrated subtitle tracks.
+## Capabilities
+
+- `search`, `episodes`, `stream`
 
 ## Usage
 
 ```ts
-import { HttpClient, AnikotoProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const provider = new AnikotoProvider(http);
+const sdk = createSdk({ sources: ['anilist', 'anikoto'] });
 
-const results = await provider.search('Naruto');
-const units = await provider.fetchContentUnits(results[0].id);
+const results = await sdk.search('Solo Leveling', { kind: 'anime' });
+const { items: episodes } = await sdk.episodes(results[0]);
 
-// Resolve sub or dub streams
-const subStream = await provider.resolveStream(units[0].id, 'sub');
-const dubStream = await provider.resolveStream(units[0].id, 'dub');
+const ep = episodes.find((e) => e.languages.includes('dub')) ?? episodes[0];
+const stream = await sdk.stream(ep, { language: 'dub' });
 ```
 
-## Characteristics
+## Stream resolution
 
-| Feature       | Details                        |
-| ------------- | ------------------------------ |
-| **Catalog**   | Anime                          |
-| **Languages** | `sub`, `dub`                   |
-| **Subtitles** | yes (Integrated in HLS)        |
-| **Method**    | JSON API + Embed Scrape        |
-| **HLS**       | Single quality with VTT tracks |
+1. Fetch embed at `megaplay.buzz/stream/s-2/{embedId}/{language}`
+2. Extract `fileId` from `<title>File XXXXX - MegaPlay</title>`
+3. Fetch sources from `/stream/getSources?id={fileId}`
 
-<Aside type="tip">
-  Anikoto is one of the most reliable providers in the SDK for dubbed content. It uses a custom
-  extraction logic for the `megaplay.buzz` embed system.
-</Aside>
+## Supported languages
+
+| Language | Support                       |
+| -------- | ----------------------------- |
+| `'sub'`  | Full                          |
+| `'dub'`  | Where available (per-episode) |

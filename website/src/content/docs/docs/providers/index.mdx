@@ -1,103 +1,82 @@
 ---
-title: Providers
-description: Overview of the nine live-tested anime and manga providers in anime-sdk.
+title: Sources
+description: Overview of the 12 live-tested anime and manga sources in anime-sdk.
 ---
 
-anime-sdk ships two kinds of providers:
+anime-sdk ships 12 sources divided into two categories:
 
-- **Content providers** — site-specific adapters that map search queries and episode/chapter IDs to direct stream or image URLs.
-- **Metadata providers** — catalogue front-ends (AniList, MAL, Kitsu) that surface rich title data (relations, characters, recommendations, per-episode streamingEpisodes) and let you swap content providers without changing your data layer.
+- **Catalogue sources** — AniList, MAL, Kitsu. Return rich `Media` records with title, cover, score, year, and cross-catalogue ID mappings. Support `search`, `info`, and `browse`.
+- **Playback sources** — site-specific adapters that resolve direct stream or image URLs. Support `episodes`/`chapters` and `stream`/`pages`.
 
-All providers are verified on every release with live, non-mocked E2E tests.
+All sources are verified on every release with live, non-mocked E2E tests.
 
-## Content providers
+The SDK picks the best playback source for a given title automatically, ranked by rolling success rate. You can inspect the ranking with `sdk.sources(media)` or target a specific source with `sources: ['allmanga']` in `createSdk()`.
 
-| ID            | Website           | Content Type | Languages     | Subtitles | Method            |
-| ------------- | ----------------- | ------------ | ------------- | --------- | ----------------- |
-| animeparadise | animeparadise.moe | ANIME        | sub           | yes (VTT) | REST API          |
-| allmanga      | allmanga.to       | ANIME        | sub, dub, raw | no        | GraphQL + AES-CTR |
-| gogoanime     | anineko.to        | ANIME        | sub           | no        | HTML scrape + HLS |
-| anikoto       | anikototv.to      | ANIME        | sub, dub      | yes (VTT) | JSON API + Embed  |
-| megaplay      | megaplay.buzz     | ANIME        | sub, dub      | yes (VTT) | AniList + mapping |
-| goyabu        | goyabu.io         | ANIME        | raw (pt-br)   | no        | batchexecute RPC  |
-| mangadex      | mangadex.org      | MANGA        | sub           | no        | JSON API          |
-| weebcentral   | weebcentral.com   | MANGA        | sub           | no        | HTML scrape       |
-| mangapill     | mangapill.com     | MANGA        | sub           | no        | HTML scrape       |
+## Catalogue sources
 
-All extend `BaseProvider` and expose identical method signatures. `AnimeParadiseProvider` and `AnikotoProvider` additionally implement the optional `fetchUnitTracks` for cheap subtitle/quality metadata. `MegaPlayProvider` implements `lookupByMapping` (its media ID is the AniList ID).
+| ID        | Site               | Capabilities         | Notes                                                      |
+| --------- | ------------------ | -------------------- | ---------------------------------------------------------- |
+| `anilist` | graphql.anilist.co | search, info, browse | browse: trending, popular, seasonal, top                   |
+| `mal`     | api.jikan.moe      | search, info, browse | browse: top, popular, seasonal                             |
+| `kitsu`   | kitsu.io           | search, info         | surfaces cross-catalogue mappings (AniList/MAL/AniDB/TVDB) |
 
-## Metadata providers
+Catalogue sources power search and metadata. They return `Media` with `mappings.anilist`, `mappings.mal`, `mappings.kitsu` so the SDK can route to playback sources.
 
-| ID      | Catalogue       | Native ID shape | Enrichments                                                                                                                                             |
-| ------- | --------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| anilist | AniList GraphQL | `anilist:21`    | Full metadata + relations + characters (with VAs) + staff + recommendations + externalLinks + streamingEpisodes + browse(trending/popular/seasonal/top) |
-| mal     | MyAnimeList     | `mal:anime:21`  | filler/recap via Jikan + relations + browse(top/popular/seasonal)                                                                                       |
-| kitsu   | Kitsu JSON:API  | `kitsu:anime:1` | core metadata + cross-source mappings (AniList/MAL/AniDB/TVDB)                                                                                          |
+## Anime playback sources
 
-All extend `BaseMetadataProvider` and share the contract `search` →
-`fetchMediaInfo` → `fetchContentUnits(metaUrn, contentProvider)` →
-`resolveStream(metaUrn, episodeNumber, contentProvider, language?)`. The
-mapping (catalogue ID → content provider raw ID) is handled by
-`MappingClient` via a cache → provider native lookup → MALSync/Anify/arm-server → fuzzy waterfall.
+| ID              | Site              | Languages     | Subtitles | Method               |
+| --------------- | ----------------- | ------------- | --------- | -------------------- |
+| `allmanga`      | allmanga.to       | sub, dub, raw | no        | GraphQL + AES-CTR    |
+| `megaplay`      | megaplay.buzz     | sub, dub      | yes (VTT) | AniList + mapping    |
+| `animeparadise` | animeparadise.moe | sub           | yes (VTT) | REST API             |
+| `anikoto`       | anikototv.to      | sub, dub      | yes (VTT) | JSON API + embed     |
+| `gogoanime`     | anineko.to        | sub           | no        | HTML scrape + HLS    |
+| `goyabu`        | goyabu.io         | pt-br (dub)   | no        | Blogger batchexecute |
 
-## Swapping providers
+## Manga playback sources
 
-```ts
-// Before
-import { GogoanimeProvider } from 'anime-sdk';
-const provider = new GogoanimeProvider(client);
-
-// After — nothing else changes
-import { AllmangaProvider } from 'anime-sdk';
-const provider = new AllmangaProvider(client);
-
-const shows = await provider.search('One Piece');
-const eps = await provider.fetchContentUnits(shows[0].id);
-const result = await provider.resolveStream(eps[0].id);
-```
+| ID            | Site            | Method      |
+| ------------- | --------------- | ----------- |
+| `mangadex`    | mangadex.org    | JSON API    |
+| `mangapill`   | mangapill.com   | HTML scrape |
+| `weebcentral` | weebcentral.com | HTML scrape |
 
 ## Testing strategy
 
-Each provider ships with a live E2E test that:
+Each source ships with a live E2E test that:
 
 1. Searches a real title against the live site
-2. Resolves a stream URL
-3. Fetches an HLS segment or probes an MP4 URL
-4. Runs `ffmpeg` to extract a frame from ~5s in
-5. Asserts the output PNG is larger than 1 KB
+2. Fetches episodes or chapters
+3. Resolves a stream or page URL
+4. For anime: runs `ffmpeg` to extract a frame from ~5s in and asserts the PNG is > 1 KB
+5. For manga: fetches the first page URL and checks the `Content-Type` is `image/*`
 
-These tests run without mocking. If a provider's upstream site changes its API or HTML structure, the test fails and the SDK is updated. Screenshots land in `scratch/screenshots/` (gitignored).
+These tests never mock network calls. If a source's upstream site changes, the test fails loudly. Screenshots land in `scratch/screenshots/` (gitignored).
 
-## Selecting a provider
+## Choosing a source
 
-**AllManga** is the best choice for breadth — widest catalogue, sub + dub, stable GraphQL API.
+`createSdk()` picks automatically. If you want to target specific ones:
 
-**AnimeParadise** is the best choice when you want **external subtitle tracks** that the SDK can hand straight to a `<track>` element (the others bake subs into the video).
+```ts
+// Anime only
+const sdk = createSdk({ sources: ['anilist', 'megaplay', 'allmanga'] });
 
-**Gogoanime** (anineko.to) is a useful fallback when AllManga is missing a title. Sub only.
-
-**Anikoto** (anikototv.to) is excellent for **dubs** and provides reliable HLS streams with integrated subtitle tracks.
-
-**MegaPlay** is a universal resolver that uses AniList for search. It is the most robust option for finding shows by their official IDs.
-
-**Goyabu** is the only option for Brazilian Portuguese content.
-
-**MangaDex** is the gold standard for Manga — huge database, reliable JSON API, and clean images.
-
-**WeebCentral** and **MangaPill** are reliable fallbacks for Manga titles not found on MangaDex.
-
-## Provider IDs
-
-The `id` property is used to identify providers in the HTTP server's `provider=` query parameter:
-
-```sh
-curl 'localhost:3000/search?q=Naruto&provider=allmanga'
-curl 'localhost:3000/search?q=Naruto&provider=animeparadise'
-curl 'localhost:3000/search?q=Naruto&provider=gogoanime'
-curl 'localhost:3000/search?q=Naruto&provider=anikoto'
-curl 'localhost:3000/search?q=Naruto&provider=megaplay'
-curl 'localhost:3000/search?q=Naruto&provider=goyabu'
-curl 'localhost:3000/search?q=Frieren&provider=mangadex'
-curl 'localhost:3000/search?q=Frieren&provider=weebcentral'
-curl 'localhost:3000/search?q=Frieren&provider=mangapill'
+// Disable one
+const sdk = createSdk({ disabled: ['goyabu'] });
 ```
+
+**AllManga** — widest anime catalogue, sub + dub, stable GraphQL API. Best default.
+
+**MegaPlay** — uses AniList IDs natively so cross-source matching is instant. Sub + dub with VTT subtitles.
+
+**AnimeParadise** — best for **external subtitle tracks** (VTT files you can pass to `<track>`).
+
+**Anikoto** — reliable dub option, integrated subtitle tracks.
+
+**Gogoanime** (anineko.to) — useful fallback for titles AllManga is missing.
+
+**Goyabu** — only option for Brazilian Portuguese (pt-br dub).
+
+**MangaDex** — gold standard for manga, huge database, clean JSON API.
+
+**WeebCentral** and **MangaPill** — reliable fallbacks for titles not on MangaDex.

@@ -3,363 +3,236 @@ title: HTTP Server
 description: Run anime-sdk as a standalone HTTP server and call it from any language over HTTP.
 ---
 
-`startServer` launches a Node `http.Server` that exposes the SDK's operations as HTTP routes: content-provider routes (`/search`, `/content`, `/stream`, `/tracks`), metadata routes (`/meta/search`, `/meta/info`, `/meta/content`, `/meta/stream`, `/meta/tracks`, `/meta/browse`), discovery (`/health`, `/openapi.json`), and an optional `/proxy`. Pass the providers and metadata providers you want to expose, plus optional flags for the proxy, a bearer token, and a cache.
+The bundled server exposes every SDK verb as an HTTP route. Zero config to start:
 
-## Starting the server
-
-```ts
-import {
-  HttpClient,
-  AllmangaProvider,
-  GogoanimeProvider,
-  AnilistMeta,
-  MalMeta,
-  startServer,
-} from 'anime-sdk';
-
-const http = new HttpClient();
-
-const server = startServer({
-  providers: [new AllmangaProvider(http), new GogoanimeProvider(http)],
-  metaProviders: [new AnilistMeta(http), new MalMeta(http)],
-  port: 3000,
-  proxy: true,
-  proxySignSecret: process.env.PROXY_SECRET, // HMAC-sign /proxy URLs (recommended in prod)
-  proxyAllowedHosts: ['wixstatic.com', 'allanime.day'], // SSRF allowlist (optional)
-});
-
-// server is an http.Server — you can call server.close() to shut it down
+```sh
+npx anime-sdk           # → listening on http://localhost:3030
+PORT=8080 npx anime-sdk
+SOURCES_DISABLED=goyabu npx anime-sdk
 ```
 
-The server logs `anime-sdk server listening on http://localhost:3000` when ready.
+Or programmatically:
+
+```ts
+import { startServerV2 } from 'anime-sdk/server';
+import { createSdk } from 'anime-sdk';
+
+// Zero config — SDK auto-constructed
+await startServerV2({ port: 3030 });
+
+// With a custom SDK instance:
+const store = new Map();
+await startServerV2({
+  port: 3030,
+  sdk: createSdk({
+    cache: { get: (k) => store.get(k), set: (k, v) => store.set(k, v) },
+    proxy: { signSecret: process.env.PROXY_SECRET },
+  }),
+});
+```
+
+`startServerV2` returns an `http.Server` — call `server.close()` to shut it down.
 
 ## Routes
 
-All routes are `GET` only. Errors return `{ error: string }` with the appropriate HTTP status.
+All routes are `GET`. Errors return `{ error: string }` with the appropriate HTTP status.
 
-### `GET /search`
+### `GET /search?q=…&kind=anime`
 
-Search for shows or manga.
+Search for anime or manga.
 
-| Param      | Required | Description                                                                                  |
-| ---------- | -------- | -------------------------------------------------------------------------------------------- |
-| `q`        | ✓        | Search query string                                                                          |
-| `provider` | ✓        | Provider ID: `allmanga`, `gogoanime`, `anikoto`, `mangadex`, `weebcentral`, or `mangapill` … |
+| Param  | Required | Values             |
+| ------ | -------- | ------------------ |
+| `q`    | ✓        | search query       |
+| `kind` |          | `anime` \| `manga` |
 
 ```sh
-curl 'localhost:3000/search?q=Frieren&provider=allmanga'
+curl 'localhost:3030/search?q=Frieren&kind=anime'
 ```
 
-Response: `IMediaSearchResult[]`
+Response: `Media[]`
 
 ```json
 [
   {
-    "id": "frieren-beyond-journeys-end",
-    "title": "Frieren: Beyond Journey's End",
-    "thumbnailUrl": "https://...",
-    "catalogType": "ANIME",
-    "providerId": "allmanga",
-    "availableLanguages": ["sub", "dub"]
+    "id": "eyJ2IjoxLCJ0IjoibWVkaWEiLCJzIjoiYW5pbGlzdCIsInIiOiIxNTQ1ODcifQ",
+    "kind": "anime",
+    "title": {
+      "preferred": "Frieren: Beyond Journey's End",
+      "english": "Frieren: Beyond Journey's End"
+    },
+    "cover": { "url": "https://s4.anilist.co/file/anilistcdn/...", "color": "#e4a15d" },
+    "score": { "value": 90, "scale": 100 },
+    "year": 2023,
+    "catalogues": ["anilist"],
+    "playbackSources": [],
+    "mappings": { "anilist": 154587, "mal": 52991 }
   }
 ]
 ```
 
-### `GET /content`
+### `GET /media/:id`
 
-List episodes for a show or chapters for a manga. One call returns the unified, language-agnostic list — each unit advertises its translations.
-
-| Param      | Required | Description               |
-| ---------- | -------- | ------------------------- |
-| `mediaId`  | ✓        | `id` from a search result |
-| `provider` | ✓        | Provider ID               |
+Full info for a single media record. `:id` is the opaque `id` from a search result.
 
 ```sh
-curl 'localhost:3000/content?mediaId=frieren-beyond-journeys-end&provider=allmanga'
+curl 'localhost:3030/media/eyJ2IjoxLCJ0IjoibWVkaWEiLCJzIjoiYW5pbGlzdCIsInIiOiIxNTQ1ODcifQ'
 ```
 
-Response: `IContentUnit[]`
+Response: `Media`
 
-```json
-[
-  {
-    "id": "frieren-beyond-journeys-end/1",
-    "title": "Episode 1",
-    "number": 1,
-    "availableLanguages": ["sub", "dub"]
-  }
-]
-```
+### `GET /media/:id/episodes?cursor=…`
 
-### `GET /stream`
-
-Resolve a direct stream URL for an episode or image URLs for a manga chapter. Pick the translation here (if applicable).
-
-| Param      | Required | Description                |
-| ---------- | -------- | -------------------------- |
-| `unitId`   | ✓        | `id` from a content result |
-| `provider` | ✓        | Provider ID                |
-| `language` |          | `sub` \| `dub` \| `raw`    |
+List episodes. Supports pagination via `cursor`.
 
 ```sh
-curl 'localhost:3000/stream?unitId=frieren-beyond-journeys-end%2F1&provider=allmanga&language=dub'
+curl 'localhost:3030/media/MEDIA_ID/episodes'
 ```
 
-Response: `ResolvedMediaStream`
-
-**Anime response:**
+Response: `List<Episode>` — `{ items: Episode[], nextCursor?: string }`
 
 ```json
 {
-  "type": "video",
-  "streams": [
+  "items": [
     {
-      "sourceUrl": "https://a4.mp4upload.com:183/d/.../video.mp4",
-      "isHLS": false,
-      "quality": "auto",
-      "language": "dub",
-      "headers": { "Referer": "https://mp4upload.com/" },
-      "subtitles": [
-        {
-          "url": "https://cdn.example.com/subs/en.vtt",
-          "language": "en",
-          "label": "English",
-          "format": "vtt"
-        }
-      ]
+      "id": "eyJ2IjoxLCJ0IjoiZXBpc29kZSIsInMiOiJtZWdhcGxheSIsInIiOiIxNTQ1ODc6MSJ9",
+      "mediaId": "...",
+      "number": 1,
+      "title": "Episode 1",
+      "languages": ["sub", "dub"],
+      "qualities": ["auto"],
+      "source": "megaplay"
     }
   ]
 }
 ```
 
-**Manga response:**
+### `GET /media/:id/chapters?cursor=…`
+
+List chapters (manga). Same shape as episodes.
+
+### `GET /media/:id/sources`
+
+Ranked list of playback sources available for this title.
+
+```sh
+curl 'localhost:3030/media/MEDIA_ID/sources'
+```
+
+Response: `SourceInfo[]`
+
+```json
+[
+  { "id": "megaplay", "status": "available", "successRate": 0.97 },
+  { "id": "allmanga", "status": "incompatible" }
+]
+```
+
+### `GET /episode/:id/stream?language=sub&quality=auto&adjacency=walk-relations`
+
+Resolve a playable stream URL.
+
+| Param       | Values                                | Default          |
+| ----------- | ------------------------------------- | ---------------- |
+| `language`  | `sub` \| `dub` \| `raw`               | `sub`            |
+| `quality`   | `1080p` \| `720p` \| `480p` \| `auto` | `auto`           |
+| `adjacency` | `within-media` \| `walk-relations`    | `walk-relations` |
+
+```sh
+curl 'localhost:3030/episode/EPISODE_ID/stream?language=dub'
+```
+
+Response: `Stream`
 
 ```json
 {
-  "type": "manga",
-  "pages": {
-    "imageUrls": ["https://...", "https://..."],
-    "headers": { "Referer": "https://..." }
+  "url": "https://cdn.example.com/ep1.m3u8",
+  "origin": {
+    "host": "cdn.example.com",
+    "url": "https://cdn.example.com/ep1.m3u8",
+    "proxied": false
+  },
+  "isHls": true,
+  "qualities": [{ "label": "auto", "url": "https://cdn.example.com/ep1.m3u8" }],
+  "language": "dub",
+  "subtitles": [],
+  "headers": { "Referer": "https://megaplay.buzz/" },
+  "adjacent": {
+    "prev": null,
+    "next": { "id": "...", "number": 2 }
   }
 }
 ```
 
-When `proxy: true`, both `sourceUrl`, anime subtitle `url`s, and manga `imageUrls` are rewritten through `/proxy` automatically.
+### `GET /chapter/:id/pages`
 
-### `GET /tracks`
-
-Inspect subtitle + quality availability for a unit **without** resolving the playable stream. Useful for populating a subtitle selector before the user hits play.
-
-| Param      | Required | Description                |
-| ---------- | -------- | -------------------------- |
-| `unitId`   | ✓        | `id` from a content result |
-| `provider` | ✓        | Provider ID                |
-| `language` |          | `sub` \| `dub` \| `raw`    |
+Resolve manga page URLs.
 
 ```sh
-curl 'localhost:3000/tracks?unitId=...&provider=animeparadise&language=sub'
+curl 'localhost:3030/chapter/CHAPTER_ID/pages'
 ```
 
-Response: `IUnitTracks`
+Response: `Pages`
 
 ```json
 {
-  "subtitles": [
+  "pages": [
     {
-      "url": "http://localhost:3000/proxy?url=...&ct=text%2Fvtt",
-      "label": "English",
-      "language": "en",
-      "format": "vtt"
+      "url": "https://uploads.mangadex.org/data/hash/page1.jpg",
+      "origin": { "host": "uploads.mangadex.org" }
     }
   ],
-  "qualities": ["auto"]
+  "adjacent": { "next": { "id": "...", "number": 2 } }
 }
 ```
 
-Returns **501** if the provider doesn't implement `fetchUnitTracks` — read subtitles from `/stream`'s response instead.
+### `GET /browse?list=trending&kind=anime`
 
-## Metadata routes
+Browse a curated list.
 
-The metadata layer is exposed under `/meta/*`. Each route takes
-`provider=<metaProviderId>` (e.g. `anilist`, `mal`, `kitsu`) and the
-mapping to a content provider happens server-side.
+| Param    | Values                                                     |
+| -------- | ---------------------------------------------------------- |
+| `list`   | `trending` \| `popular` \| `seasonal` \| `top`             |
+| `kind`   | `anime` \| `manga`                                         |
+| `season` | `WINTER` \| `SPRING` \| `SUMMER` \| `FALL` (seasonal only) |
+| `year`   | four-digit year (seasonal only)                            |
 
-### `GET /meta/search`
+Response: `List<Media>`
 
-```sh
-curl 'localhost:3000/meta/search?provider=anilist&q=Cowboy%20Bebop'
-```
+### `GET /health`
 
-### `GET /meta/info`
-
-```sh
-curl 'localhost:3000/meta/info?provider=anilist&id=anilist:1'
-```
-
-Returns the full `IMediaMetadata` record: title, description, cover,
-relations (sequel/prequel), characters (with voice actors), staff,
-recommendations, external links, `streamingEpisodes`, and `mappings`
-(cross-source IDs).
-
-The server validates that the URN's prefix matches the meta provider —
-hitting `/meta/info?provider=anilist&id=mal:21` returns 400.
-
-### `GET /meta/content`
-
-List episodes/chapters for a meta URN on a specific content provider.
-Mapping is automatic.
+Returns current source health.
 
 ```sh
-curl 'localhost:3000/meta/content?provider=anilist&id=anilist:1&contentProvider=allmanga'
+curl 'localhost:3030/health'
 ```
 
-### `GET /meta/stream` / `GET /meta/tracks`
+Response: `SourceHealth[]`
 
-Resolve a stream / tracks by metadata + episode number:
-
-```sh
-curl 'localhost:3000/meta/stream?provider=anilist&id=anilist:1&episode=1&contentProvider=allmanga&language=sub'
+```json
+[{ "id": "anilist", "successRate": 1, "avgLatencyMs": 320, "calls": 15 }]
 ```
-
-### `GET /meta/browse`
-
-Trending / popular / seasonal / top from the catalogue:
-
-```sh
-curl 'localhost:3000/meta/browse?provider=anilist&kind=trending&perPage=10'
-curl 'localhost:3000/meta/browse?provider=anilist&kind=seasonal&season=FALL&year=2024'
-```
-
-## Discovery
-
-`GET /health` returns a JSON summary of the server's capabilities
-(registered providers, registered meta providers, whether `/proxy` is
-enabled).
-
-`GET /openapi.json` returns an OpenAPI 3.1 spec describing every route —
-feed it to Swagger UI / Redoc / a codegen tool.
-
-## Signing `/proxy` URLs
-
-Setting `proxySignSecret` requires every `/proxy?url=...` to carry a
-matching `sig` HMAC-SHA256 query parameter. The signature is computed over
-`url` plus optional `|h=<h>`. The proxy rewriter automatically signs URLs
-it emits, so callers using `/stream` / `/meta/stream` don't need to know
-about it.
-
-```ts
-import * as crypto from 'node:crypto';
-const sig = crypto.createHmac('sha256', secret).update(targetUrl).digest('hex');
-```
-
-Unsigned or invalid-signature requests return 401.
-
-## SSRF allowlist
-
-`proxyAllowedHosts: string[]` restricts `/proxy` to a suffix-matched list
-of upstream hosts. Each entry covers all subdomains:
-
-```ts
-proxyAllowedHosts: ['wixstatic.com', 'allanime.day', 'mp4upload.com'];
-```
-
-Targets outside the list return 403. When unset, all hosts are allowed —
-fine for local development, risky in production (the server otherwise
-becomes an open relay).
-
-## Authentication
-
-Lock the server behind a bearer token:
-
-```ts
-startServer({
-  providers: [new AllmangaProvider(new HttpClient())],
-  port: 3000,
-  auth: { token: process.env.API_TOKEN! },
-});
-```
-
-Clients include the token in the `Authorization` header:
-
-```sh
-curl -H 'Authorization: Bearer mysecret' 'localhost:3000/search?q=Naruto&provider=allmanga'
-```
-
-Requests without a valid token receive `401 Unauthorized`. Skip `auth` entirely for local use.
-
-## Caching
-
-`startServer` accepts an optional `cache` that memoises provider calls across `/search`, `/content`, `/stream`, and `/tracks`. The contract is two methods:
-
-```ts
-interface SdkCache {
-  get(key: string): unknown | Promise<unknown>;
-  set(key: string, value: unknown): void | Promise<void>;
-}
-```
-
-A plain `Map` satisfies it — bring whatever store you like (Redis, SQLite, edge KV):
-
-```ts
-const store = new Map();
-const cache = {
-  get: (key) => store.get(key),
-  set: (key, value) => void store.set(key, value),
-};
-
-startServer({
-  providers: [new AllmangaProvider(new HttpClient())],
-  port: 3000,
-  proxy: true,
-  cache,
-});
-```
-
-Keys are namespaced so different endpoints can have different policies:
-
-| Prefix     | Key shape                             | Notes                                                              |
-| ---------- | ------------------------------------- | ------------------------------------------------------------------ |
-| `search:`  | `search:<providerId>:<query>`         | Stable; safe to cache for long.                                    |
-| `content:` | `content:<providerId>:<mediaId>`      | Stable; safe to cache for long.                                    |
-| `stream:`  | `stream:<providerId>:<unitId>:<lang>` | Stream URLs may carry signed expiries — apply a short TTL or skip. |
-| `tracks:`  | `tracks:<providerId>:<unitId>:<lang>` | Cheap to compute when the provider supports it; cache freely.      |
-
-`get` returns `undefined` for a miss; any other value (including `null`) is treated as a hit and served as-is. To skip caching a specific endpoint, inspect the prefix in your `set` and bail out.
-
-## Error responses
-
-| Status | Meaning                                                        |
-| ------ | -------------------------------------------------------------- |
-| 400    | Missing or unknown query parameter                             |
-| 401    | Missing or invalid bearer token                                |
-| 404    | Unknown route                                                  |
-| 405    | Non-GET request                                                |
-| 500    | Provider threw an error (message is included in `error` field) |
 
 ## Calling from other languages
-
-The server is the bridge for any client that can't run Node directly.
 
 **Python:**
 
 ```python
 import httpx
 
-base = 'http://localhost:3000'
-headers = {'Authorization': 'Bearer mysecret'}
-
-shows = httpx.get(f'{base}/search', params={'q': 'Frieren', 'provider': 'allmanga'}, headers=headers).json()
-eps   = httpx.get(f'{base}/content', params={'mediaId': shows[0]['id'], 'provider': 'allmanga'}, headers=headers).json()
-data  = httpx.get(f'{base}/stream',  params={'unitId': eps[0]['id'], 'provider': 'allmanga'}, headers=headers).json()
-url   = data['streams'][0]['sourceUrl']
+base = 'http://localhost:3030'
+shows = httpx.get(f'{base}/search', params={'q': 'Frieren', 'kind': 'anime'}).json()
+eps   = httpx.get(f'{base}/media/{shows[0]["id"]}/episodes').json()
+data  = httpx.get(f'{base}/episode/{eps["items"][0]["id"]}/stream', params={'language': 'sub'}).json()
+print(data['url'])
 ```
 
 **Swift (iOS):**
 
 ```swift
-let url = URL(string: "http://localhost:3000/search?q=Frieren&provider=allmanga")!
+let url = URL(string: "http://localhost:3030/search?q=Frieren&kind=anime")!
 let (data, _) = try await URLSession.shared.data(from: url)
-let shows = try JSONDecoder().decode([MediaSearchResult].self, from: data)
+let shows = try JSONDecoder().decode([MediaResult].self, from: data)
 ```
 
 **Kotlin / Android:**
@@ -367,9 +240,39 @@ let shows = try JSONDecoder().decode([MediaSearchResult].self, from: data)
 ```kotlin
 val client = OkHttpClient()
 val request = Request.Builder()
-    .url("http://10.0.2.2:3000/search?q=Frieren&provider=allmanga")
+    .url("http://10.0.2.2:3030/search?q=Frieren&kind=anime")
     .build()
 val response = client.newCall(request).execute()
 ```
 
-Note: in Android emulators, `localhost` on the host machine is reachable at `10.0.2.2`.
+Note: in Android emulators, `localhost` on the host machine is `10.0.2.2`.
+
+## Proxy
+
+When `proxy` is configured in `createSdk()`, all stream URLs in `/episode/:id/stream` and page URLs in `/chapter/:id/pages` responses are rewritten to go through `/proxy`. See [Stream Proxy](/docs/proxy/).
+
+## Caching
+
+Pass a cache to `createSdk()`:
+
+```ts
+const store = new Map();
+startServerV2({
+  sdk: createSdk({
+    cache: {
+      get: (key) => store.get(key),
+      set: (key, value) => store.set(key, value),
+    },
+  }),
+});
+```
+
+Search results and episode lists are safe to cache indefinitely. Stream URLs carry signed expiries — use a short TTL or skip caching them.
+
+## Error responses
+
+| Status | Meaning                                          |
+| ------ | ------------------------------------------------ |
+| 400    | Missing required query parameter                 |
+| 404    | Unknown route or media/episode not found         |
+| 500    | Source threw an error (message in `error` field) |

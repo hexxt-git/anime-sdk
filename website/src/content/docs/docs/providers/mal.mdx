@@ -1,58 +1,42 @@
 ---
-title: MyAnimeList (Jikan)
-description: How to use the MalMeta metadata provider in anime-sdk.
+title: mal
+description: MyAnimeList catalogue source via Jikan v4 — search, info, browse.
 ---
 
-`MalMeta` is the MyAnimeList front-end, backed by the unofficial-but-stable
-[Jikan v4](https://jikan.moe) public API. It surfaces normalized title
-metadata, anime relations, and — uniquely — per-episode filler/recap
-flags from Jikan's `/anime/{id}/episodes` endpoint.
+`MalSource` queries the public Jikan v4 API (`api.jikan.moe`) and returns `Media` records for anime and manga. No API key required.
 
-No API key required.
+## Capabilities
+
+- `search(query, kind)` — full-text search
+- `info(id)` — full `Media` record
+- `browse({ list, kind })` — top, popular, seasonal
 
 ## Usage
 
 ```ts
-import { HttpClient, MalMeta, AllmangaProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const meta = new MalMeta(http);
+const sdk = createSdk({ sources: ['mal'] });
 
-const info = await meta.fetchMediaInfo('mal:anime:1');
-console.log(info.streamingEpisodes?.[0].isFiller); // boolean
+const results = await sdk.search('Cowboy Bebop', { kind: 'anime' });
+// results[0].mappings.mal → 1
 
-const allmanga = new AllmangaProvider(http);
-const stream = await meta.resolveStream('mal:anime:1', 1, allmanga, 'sub');
+const top = await sdk.browse({ list: 'top', kind: 'anime' });
 ```
 
-## URN shape — typed
+## ID format
 
-MAL integer IDs aren't globally unique across anime/manga (MAL #1 is
-both an anime and a manga), so the URN encodes the catalogue kind:
+MAL uses typed IDs internally (`anime:1` / `manga:13`) because the same integer can refer to both an anime and a manga. These are encoded in the opaque `id` field — you never see the typed form as a consumer.
 
-```
-mal:anime:21
-mal:manga:13
-```
+## Browse lists
 
-Legacy bare URNs (`mal:21`) still resolve — `MalMeta` probes `/anime`
-first and falls back to `/manga`.
+| List     | Notes                             |
+| -------- | --------------------------------- |
+| top      | Top anime/manga by score          |
+| popular  | Top by popularity (member count)  |
+| seasonal | Requires `season` + `year` params |
 
-## Browse
+## Notes
 
-```ts
-await meta.browse('top', { catalogType: 'ANIME', perPage: 10 });
-await meta.browse('popular');
-await meta.browse('seasonal', { season: 'FALL', year: 2024 });
-```
-
-## Characteristics
-
-| Feature                   | Details                                                         |
-| ------------------------- | --------------------------------------------------------------- |
-| **Catalogues**            | Anime + Manga                                                   |
-| **Native ID shape**       | `mal:anime:<integer>` / `mal:manga:<integer>`                   |
-| **Endpoint**              | `api.jikan.moe/v4` (free, keyless)                              |
-| **Rate limit (built-in)** | 55 req/min, with a 3 req/s burst window (matches Jikan's quota) |
-| **Enrichments**           | filler/recap via `/anime/{id}/episodes`, `relations`            |
-| **Browse**                | `top`, `popular`, `seasonal`                                    |
+- Jikan rate limit: 3 req/s, 60 req/min.
+- `media.score` is computed as `Math.round(malScore * 10)` with `scale: 100`.

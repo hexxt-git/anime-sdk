@@ -1,829 +1,402 @@
 ---
 title: API Reference
-description: Complete type and interface documentation for anime-sdk.
+description: Complete type and function documentation for anime-sdk 2.0.
 ---
 
-## Types
-
-### `ContentLanguage`
+## `createSdk(opts?)`
 
 ```ts
-type ContentLanguage = 'sub' | 'dub' | 'raw';
+import { createSdk } from 'anime-sdk';
+const sdk = createSdk(opts?);
 ```
 
-| Value   | Meaning                        |
-| ------- | ------------------------------ |
-| `'sub'` | Original audio with subtitles  |
-| `'dub'` | Dubbed audio (usually English) |
-| `'raw'` | Original audio, no subtitles   |
+Factory — instantiates the SDK with all 12 sources registered.
 
-### `MediaCatalogType`
+### `SdkOptions`
 
 ```ts
-type MediaCatalogType = 'ANIME' | 'MOVIE' | 'TV' | 'MANGA';
+interface SdkOptions {
+  sources?: string[]; // whitelist source IDs; default: all 12
+  disabled?: string[]; // blacklist a subset
+  http?: {
+    timeoutMs?: number; // default: 30000
+    retries?: number; // default: 3
+    userAgent?: string;
+  };
+  proxy?: {
+    signSecret?: string; // HMAC-sign proxy URLs
+    allowedHosts?: string[]; // SSRF suffix-matched allowlist
+  };
+  cache?: {
+    get(k: string): unknown;
+    set(k: string, v: unknown): void;
+  };
+  ratelimit?: Record<string, number>; // hostname → req/sec override
+}
 ```
 
-Supported types include `'ANIME'` and `'MANGA'`.
+---
 
-### `Urn`
+## Sdk methods
 
-```ts
-type Urn = string;
-```
-
-Every `id` flowing in or out of the SDK is a URN of shape
-`${providerId}:${rawId}`. The first colon is the separator; the raw
-portion is opaque and may itself contain colons or slashes. See the
-[URN helpers](#urn-helpers) section for builders/parsers.
-
-### `CallOptions`
+### `sdk.search(query, opts?)`
 
 ```ts
-interface CallOptions {
-  /** Cancels the in-flight call. Threaded into fetch + rate limiter + retry. */
+sdk.search(query: string, opts?: {
+  kind?:   'anime' | 'manga';  // default: 'anime'
   signal?: AbortSignal;
-  /** Meta-layer only: throw on a missing episode instead of falling back. */
-  strictEpisodeMatching?: boolean;
-  /** Meta-layer only: behaviour of the absolute-episode rescue. */
-  episodeAbsoluteMatching?: 'auto' | 'always' | 'never';
-}
+}): ProgressiveResult<Media>
 ```
 
-The canonical options bag — every public method in the SDK (content and
-metadata providers, mapping client) accepts an instance. Fields that
-aren't meaningful at a particular layer are simply ignored there.
+Returns a value that is both `AsyncIterable<Media>` (iterate for results as they arrive) and `PromiseLike<Media[]>` (await for the full array). Calls `.cancel()` to abort.
 
-### `IMediaSearchResult`
-
-Returned by `provider.search()`.
+### `sdk.info(media, opts?)`
 
 ```ts
-interface IMediaSearchResult {
-  id: Urn; // `${providerId}:${rawId}` — pass to fetchContentUnits
-  title: string;
-  thumbnailUrl?: string;
-  catalogType: MediaCatalogType;
-  providerId: string; // matches provider.id
-  availableLanguages?: ContentLanguage[]; // omitted if unknown
-  /** Year of release, when the provider exposes it. Used by the
-   * metadata layer's fuzzy matcher as a discriminator. */
-  year?: number;
-}
+sdk.info(media: Media | string, opts?: { signal?: AbortSignal }): Promise<Media>
 ```
 
-### `IContentUnit`
+Full info for a single title. Accepts a `Media` object or an opaque `id` string.
 
-Returned by `provider.fetchContentUnits()`. Represents a single episode or chapter in a unified, language-agnostic list: the caller picks a translation at `resolveStream` time.
+### `sdk.sources(media, opts?)`
 
 ```ts
-interface IContentUnit {
-  id: Urn; // pass to resolveStream
-  title: string;
-  number: number; // episode/chapter number (may be fractional, e.g. 1.5)
-  availableLanguages?: ContentLanguage[]; // e.g. ['sub', 'dub']: omitted if unknown
-  availableSubtitles?: ISubtitleAvailability[]; // optional, list-time metadata
-  availableQualities?: IVideoPayload['quality'][]; // optional
-  /** Per-episode metadata folded in by the metadata layer
-   * (AniList `streamingEpisodes`, Jikan filler/recap flags). */
-  thumbnailUrl?: string;
-  description?: string;
-  airDate?: string;
-  isFiller?: boolean;
-  isRecap?: boolean;
-}
+sdk.sources(media: Media | string, opts?: { signal?: AbortSignal }): Promise<SourceInfo[]>
 ```
 
-### `ISubtitleTrack` / `ISubtitleAvailability`
+Returns playback sources ranked by health × coverage. `status: 'available'` means the source has this title.
+
+### `sdk.episodes(media, opts?)`
 
 ```ts
-interface ISubtitleAvailability {
-  language: string; // BCP-47 (e.g. 'en', 'pt-BR')
-  label: string; // human-readable ('English')
-  format?: 'vtt' | 'srt' | 'ass';
-}
-
-interface ISubtitleTrack extends ISubtitleAvailability {
-  url: string;
-}
+sdk.episodes(media: Media | string, opts?: {
+  signal?:  AbortSignal;
+  cursor?:  string;
+  limit?:   number;
+}): Promise<List<Episode>>
 ```
 
-`ISubtitleAvailability` is the metadata-only shape used in list contexts; `ISubtitleTrack` adds the URL once resolved.
-
-### `IUnitTracks`
-
-Returned by the optional `provider.fetchUnitTracks()`. Lets a UI introspect tracks without paying the cost of a full stream resolution.
+### `sdk.chapters(media, opts?)`
 
 ```ts
-interface IUnitTracks {
-  subtitles: ISubtitleTrack[];
-  qualities: IVideoPayload['quality'][];
-  headers?: Record<string, string>; // forwarded to the subtitle/stream fetcher when present
-}
+sdk.chapters(media: Media | string, opts?: {
+  signal?:  AbortSignal;
+  cursor?:  string;
+  limit?:   number;
+}): Promise<List<Chapter>>
 ```
 
-### `IVideoPayload`
-
-A single playable stream.
+### `sdk.stream(episode, opts?)`
 
 ```ts
-interface IVideoPayload {
-  sourceUrl: string;
-  isHLS: boolean; // true → HLS manifest (.m3u8)
-  quality: '1080p' | '720p' | '480p' | '360p' | 'auto';
-  language?: ContentLanguage;
-  headers?: Record<string, string>; // forward to fetch/player (Referer, User-Agent)
-  subtitles?: ISubtitleTrack[]; // external VTT tracks when the provider has them
-}
+sdk.stream(episode: Episode | string, opts?: {
+  language?:  'sub' | 'dub' | 'raw';
+  quality?:   string;
+  adjacency?: 'within-media' | 'walk-relations'; // default: 'walk-relations'
+  signal?:    AbortSignal;
+}): Promise<Stream>
 ```
 
-### `SdkCache`
+`adjacency: 'walk-relations'` follows SEQUEL/PREQUEL relations to populate `stream.adjacent` at season boundaries. `'within-media'` stops at the last episode.
 
-Minimal pluggable cache contract: bring whatever store you want (`Map`, Redis, SQLite, edge KV). Both methods may be sync or async; the SDK awaits either way.
+### `sdk.pages(chapter, opts?)`
 
 ```ts
-interface SdkCache {
-  get(key: string): unknown | Promise<unknown>;
-  set(key: string, value: unknown): void | Promise<void>;
-}
+sdk.pages(chapter: Chapter | string, opts?: { signal?: AbortSignal }): Promise<Pages>
 ```
 
-Keys are namespaced strings produced by `startServer`: `search:<providerId>:<query>`, `content:<providerId>:<mediaId>`, `stream:<providerId>:<unitId>:<lang>`, `tracks:<providerId>:<unitId>:<lang>`. `get` returns `undefined` for a miss; any other value (including `null`) is treated as a hit. Inspect the key prefix in your `set` to apply different TTLs per endpoint or refuse to cache (e.g. `stream:` if your provider hands out signed expiring URLs).
+No `language` argument — manga has no language axis.
 
-### `IMangaPayload`
+### `sdk.browse(opts)`
 
 ```ts
-interface IMangaPayload {
-  imageUrls: string[];
-  headers?: Record<string, string>;
-}
+sdk.browse(opts: {
+  list:     'trending' | 'popular' | 'seasonal' | 'top';
+  kind:     'anime' | 'manga';
+  signal?:  AbortSignal;
+  page?:    number;
+  perPage?: number;
+  season?:  string;  // required for 'seasonal'
+  year?:    number;  // required for 'seasonal'
+}): Promise<List<Media>>
 ```
 
-### `ResolvedMediaStream`
-
-Returned by `provider.resolveStream()`. A discriminated union: always check `type` before accessing the payload.
+### `sdk.health()`
 
 ```ts
-type ResolvedMediaStream =
-  | { type: 'video'; streams: IVideoPayload[] }
-  | { type: 'manga'; pages: IMangaPayload };
+sdk.health(): SourceHealth[]
 ```
 
-Anime providers return `type: 'video'`; manga providers return `type: 'manga'`. The `streams` array on video results is sorted best-first by the provider.
+Synchronous. Returns rolling success/latency stats per source.
 
 ---
 
-## HttpClient
+## Value types
 
-The shared HTTP transport. All providers and extractors accept one via constructor.
-
-```ts
-class HttpClient {
-  constructor(config?: HttpClientConfig);
-}
-
-interface HttpClientConfig {
-  timeoutMs?: number; // default: 10000 (10s)
-  proxyUrl?: string; // e.g. 'https://proxy.example.com'
-  proxyType?: 'prepend' | 'query'; // default: 'prepend'
-  proxyQueryParam?: string; // used when proxyType='query'; default: 'url'
-  defaultHeaders?: Record<string, string>;
-  /** Per-host token-bucket rate limits. Merged on top of DEFAULT_RATE_LIMITS
-   *  (AniList / Jikan / Kitsu / MALSync / Anify / arm-server). */
-  rateLimits?: PerHostRateLimits;
-  defaultRateLimit?: RateLimitConfig;
-  disableRateLimit?: boolean;
-  /** Retry policy. Defaults to 3 attempts with exponential backoff on
-   *  408/425/429/5xx and transient network errors. Honours Retry-After. */
-  retry?: RetryConfig | false;
-  /** Pluggable transport. Defaults to CurlFallbackTransport on Node. */
-  transport?: HttpTransport;
-}
-```
-
-### Rate limiting + retry + AbortSignal
-
-`HttpClient.request` composes three middlewares around the underlying
-transport, each on by default:
-
-- **Per-host token-bucket rate limiter** (`RateLimiter`) with built-in
-  policies for the catalogue APIs (`DEFAULT_RATE_LIMITS`). Re-acquired
-  on every retry so a retry storm can't blow past the configured cap.
-- **Exponential-backoff retry** (`withRetry`) that honours `Retry-After`
-  on `408/425/429/5xx` responses and transient network errors. Throws
-  `HttpRetryableError` after exhausting attempts.
-- **AbortSignal composition**: the caller's `options.signal` and the
-  internal timeout signal are merged — either one aborts the in-flight
-  request.
+### `Media`
 
 ```ts
-const ac = new AbortController();
-setTimeout(() => ac.abort(), 1500);
-await http.get('https://graphql.anilist.co', { signal: ac.signal });
-```
-
-### Pluggable transport
-
-`HttpTransport` is a one-method interface: `fetch(url, init)`. Two
-implementations ship:
-
-- **`CurlFallbackTransport`** (default on Node): tries `fetch` first, falls
-  back to `curl` via `child_process.execSync` on network error.
-- **`FetchTransport`**: plain `fetch`. Use on Workers/Deno or in tests
-  where the curl fallback is undesirable.
-
-Bring your own (Undici dispatcher, Cloudflare-bypass proxy, in-process
-test transport) by implementing the interface and passing it as
-`transport`.
-
-### Methods
-
-```ts
-get(url: string, options?: RequestInit): Promise<Response>
-post(url: string, body?: any, options?: RequestInit): Promise<Response>
-request(url: string, options?: RequestInit): Promise<Response>
-
-// Convenience mutators (affect defaultHeaders)
-setCookie(name: string, value: string): void
-setUserAgent(userAgent: string): void
-
-// Proxy internals (used by HlsUtils)
-getProxyUrl(): string | undefined
-getProxyType(): 'prepend' | 'query'
-getProxyQueryParam(): string
-getDefaultHeaders(): Record<string, string>
-requestUrl(url: string): string  // applies proxy rewriting to a URL
-```
-
-### Proxy modes
-
-**`prepend`**: strips the protocol from the target and prepends the proxy base:
-
-```
-proxyUrl: 'https://proxy.example.com'
-target:   'https://cdn.site.com/video.m3u8'
-result:   'https://proxy.example.com/cdn.site.com/video.m3u8'
-```
-
-**`query`**: passes the target as a query param:
-
-```
-proxyUrl:        'https://proxy.example.com/fetch'
-proxyQueryParam: 'url'
-result:          'https://proxy.example.com/fetch?url=https%3A%2F%2Fcdn.site.com%2Fvideo.m3u8'
-```
-
-### curl fallback (default Node transport)
-
-When `CurlFallbackTransport` is in use and `fetch` throws (timeout, TLS
-error, anti-bot rejection), the transport automatically retries the
-request using `curl` via `child_process.execSync`. The fallback
-synthesises a standard `Response`-shaped object, so callers see no
-difference. Cookie persistence uses a per-client temp file.
-
----
-
-## URN helpers
-
-Every `id` flowing through the SDK is a URN of shape
-`${providerId}:${rawId}`. Helpers live in `utils/urn.ts`:
-
-```ts
-buildUrn(providerId: string, rawId: string): Urn
-parseUrn(urn: string): { providerId: string; rawId: string }
-unwrapUrn(providerId: string, urn: string): string
-strictUnwrapUrn(providerId: string, urn: string): string  // throws on mismatch
-isUrn(value: string, providerId?: string): boolean
-
-// Typed catalogue URNs — for MAL/Kitsu where the integer ID isn't
-// globally unique across anime/manga.
-buildTypedUrn(providerId: string, kind: 'anime' | 'manga', rawId: string | number): Urn
-parseTypedUrn(providerId: string, urn: string): { kind?: 'anime' | 'manga'; rawId: string }
-```
-
-`strictUnwrapUrn` throws on a prefix mismatch — use it in routing paths
-where a wrong URN should fail loudly instead of being silently
-misrouted (the server uses it on `/meta/info`).
-
----
-
-## BaseProvider
-
-```ts
-abstract class BaseProvider {
-  abstract readonly id:             string;
-  abstract readonly supportedTypes: MediaCatalogType[];
-
-  constructor(protected http: HttpClient);
-
-  // Public API — URN-prefixed ids in and out.
-  search(query: string, options?: CallOptions): Promise<IMediaSearchResult[]>;
-  fetchContentUnits(mediaUrn: Urn, options?: CallOptions): Promise<IContentUnit[]>;
-  resolveStream(
-    unitUrn:   Urn,
-    language?: ContentLanguage,
-    options?:  CallOptions,
-  ): Promise<ResolvedMediaStream>;
-  fetchUnitTracks(
-    unitUrn:   Urn,
-    language?: ContentLanguage,
-    options?:  CallOptions,
-  ): Promise<IUnitTracks>;
-
-  get supportsUnitTracks(): boolean;
-
-  /** Optional: provider-native cross-source lookup. When a provider's
-   *  site indexes by AniList/MAL ID directly, implement this and
-   *  MappingClient will use it before the external/fuzzy fallbacks. */
-  lookupByMapping?(
-    mappings: IMediaMappings,
-    options?: CallOptions,
-  ): Promise<string | null>;
-
-  /** Optional: MALSync `Sites` aliases this provider corresponds to. */
-  static readonly malsyncSites: readonly string[];
-
-  /** Optional: caps in-flight calls on this provider via FIFO semaphore. */
-  readonly maxConcurrency: number;
-
-  // Subclass surface — raw (non-URN) IDs. Subclasses implement these;
-  // the public methods above wrap them with URN encoding + concurrency cap.
-  protected abstract searchRaw(
-    query:    string,
-    options?: CallOptions,
-  ): Promise<IMediaSearchResult[]>;
-  protected abstract fetchContentUnitsRaw(
-    rawMediaId: string,
-    options?:   CallOptions,
-  ): Promise<IContentUnit[]>;
-  protected abstract resolveStreamRaw(
-    rawUnitId: string,
-    language?: ContentLanguage,
-    options?:  CallOptions,
-  ): Promise<ResolvedMediaStream>;
-  protected fetchUnitTracksRaw?(
-    rawUnitId: string,
-    language?: ContentLanguage,
-    options?:  CallOptions,
-  ): Promise<IUnitTracks>;
-}
-```
-
----
-
-## Metadata layer
-
-### `IMediaMetadata`
-
-The full normalized metadata record returned by
-`metaProvider.fetchMediaInfo`. Includes everything the catalogue ships:
-
-```ts
-interface IMediaMetadata {
-  id: Urn; // e.g. 'anilist:1'
-  providerId: string; // 'anilist' | 'mal' | 'kitsu'
-  catalogType: MediaCatalogType;
-  title: IMediaTitle; // romaji / english / native / userPreferred
-  description?: string;
-  cover?: IMediaImage;
+interface Media {
+  id: string; // opaque base64url token — pass to SDK methods
+  kind: 'anime' | 'manga';
+  title: MediaTitle;
+  cover?: MediaCover;
   banner?: string;
-  status?: MediaStatus;
-  format?: MediaFormat;
+  score?: Score;
+  year?: number;
+  season?: 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL';
+  status?: 'FINISHED' | 'RELEASING' | 'NOT_YET_RELEASED' | 'CANCELLED' | 'HIATUS';
+  format?: 'TV' | 'MOVIE' | 'OVA' | 'ONA' | 'SPECIAL' | 'MANGA' | 'NOVEL';
   episodeCount?: number;
   chapterCount?: number;
-  durationMinutes?: number;
-  genres?: string[];
-  tags?: string[];
-  studios?: string[];
-  year?: number;
-  season?: MediaSeason;
-  startDate?: string; // ISO 8601 yyyy-mm-dd
-  endDate?: string;
-  score?: number; // normalized 0–100
-  trailer?: string;
-  isAdult?: boolean;
-  synonyms?: string[];
-  mappings?: IMediaMappings; // cross-source: anilist / mal / kitsu / anidb / …
-  relations?: IMediaRelation[];
-  characters?: IMediaCharacter[]; // includes voiceActors[]
-  staff?: IMediaStaff[];
-  recommendations?: IMediaRecommendation[];
-  externalLinks?: IMediaExternalLink[];
-  streamingEpisodes?: IStreamingEpisode[]; // per-episode title/thumbnail
+  description?: string;
+  catalogues: string[]; // which catalogues contributed
+  playbackSources: string[]; // which playback sources have it
+  mappings: {
+    anilist?: number;
+    mal?: number;
+    kitsu?: number;
+    sources?: Record<string, string>; // source id → raw media id
+  };
 }
 ```
 
-### `BaseMetadataProvider`
+### `MediaTitle`
 
 ```ts
-abstract class BaseMetadataProvider {
-  abstract readonly id: string; // 'anilist' | 'mal' | 'kitsu'
-  abstract readonly supportedTypes: MediaCatalogType[];
-
-  search(query: string, options?: CallOptions): Promise<IMetaSearchResult[]>;
-  fetchMediaInfo(metaUrn: Urn, options?: CallOptions): Promise<IMediaMetadata>;
-  fetchContentUnits(
-    metaUrn: Urn,
-    contentProvider: BaseProvider,
-    options?: CallOptions,
-  ): Promise<IContentUnit[]>;
-  resolveStream(
-    metaUrn: Urn,
-    episodeNumber: number,
-    contentProvider: BaseProvider,
-    language?: ContentLanguage,
-    options?: CallOptions,
-  ): Promise<ResolvedMediaStream>;
-  fetchUnitTracks(
-    metaUrn: Urn,
-    episodeNumber: number,
-    contentProvider: BaseProvider,
-    language?: ContentLanguage,
-    options?: CallOptions,
-  ): Promise<IUnitTracks>;
-  browse(kind: BrowseKind, options?: BrowseOptions): Promise<IMetaSearchResult[]>;
-  supportsBrowseKind(kind: BrowseKind): boolean;
-
-  /** Walks PREQUEL relations to compute a season offset for multi-season
-   *  titles where the meta record's per-season numbering misaligns with
-   *  the content provider's continuous list. */
-  computeAbsoluteEpisodeOffset(metaUrn: Urn, options?: CallOptions): Promise<number>;
-}
-
-type BrowseKind = 'trending' | 'popular' | 'seasonal' | 'top';
-```
-
-Concrete providers: `AnilistMeta`, `MalMeta`, `KitsuMeta`.
-
-### `MappingClient`
-
-Resolves a metadata record onto a content provider's raw media ID via a
-four-step waterfall: SdkCache → `provider.lookupByMapping` →
-MALSync/Anify/arm-server (raced in parallel) → fuzzy title search.
-
-```ts
-class MappingClient {
-  constructor(http: HttpClient, options?: MappingClientOptions);
-
-  resolveProviderMediaId(
-    metadata: IMediaMetadata,
-    contentProvider: BaseProvider,
-    options?: CallOptions,
-  ): Promise<MappingResolution | null>;
-}
-
-interface MappingResolution {
-  providerId: string;
-  rawMediaId: string;
-  matchedTitle: string;
-  method: 'cached' | 'provider' | 'malsync' | 'anify' | 'arm' | 'fuzzy';
-  similarity?: number;
+interface MediaTitle {
+  preferred: string; // best available: english ?? romaji ?? native
+  english?: string;
+  romaji?: string;
+  native?: string;
 }
 ```
 
-The fuzzy matcher uses composite similarity (Sørensen–Dice + token
-Jaccard + prefix score) with year and catalogType discriminators and an
-optional episode-count cross-check for borderline matches. The metadata
-record is never mutated; results land in the optional `SdkCache` keyed
-by `mapping:${metaProvider}:${metaNativeId}:${contentProvider}`.
-
----
-
-## BaseExtractor
+### `MediaCover`
 
 ```ts
-abstract class BaseExtractor {
-  abstract readonly id: string;
-  constructor(protected http: HttpClient);
-  abstract extract(embedUrl: string): Promise<IVideoPayload[]>;
+interface MediaCover {
+  url: string;
+  color?: string; // dominant color in hex (e.g. '#e4a15d')
 }
 ```
 
-Extractors return an empty array (never throw) when they cannot handle the given URL.
-
----
-
-## Extractors
-
-### `BloggerExtractor`
-
-Extracts `googlevideo.com` MP4 URLs from Blogger video embeds.
+### `Score`
 
 ```ts
-class BloggerExtractor extends BaseExtractor {
-  readonly id = 'blogger';
-  static matches(url: string): boolean; // true for blogger.com/video.g?token=...
-  extract(embedUrl: string): Promise<IVideoPayload[]>;
+interface Score {
+  value: number; // e.g. 87
+  scale: number; // e.g. 100
+}
+// Display as: (score.value / score.scale * 10).toFixed(1) → "8.7"
+```
+
+### `Episode`
+
+```ts
+interface Episode {
+  id: string; // opaque — pass to sdk.stream()
+  mediaId: string;
+  number: number;
+  title?: string;
+  thumbnail?: string;
+  airDate?: string;
+  filler?: boolean;
+  recap?: boolean;
+  languages: ('sub' | 'dub' | 'raw')[];
+  qualities: ('1080p' | '720p' | '480p' | '360p' | 'auto')[];
+  source: string; // source id that produced this entry
 }
 ```
 
-**Flow:**
-
-1. Fetch the embed page; extract `FdrFJe` (session ID) and `cfb2h` (build hash).
-2. POST to `/_/BloggerVideoPlayerUi/data/batchexecute` with the `WcwnYd` RPC.
-3. Parse the response: find the stream array inside the `wrb.fr` / `WcwnYd` envelope; prefer `itag=22` (720p) over `itag=18` (360p).
-4. Falls back to a raw regex scan for `googlevideo.com` URLs if structured parsing yields nothing.
-
-Returned URLs require `{ Referer: 'https://www.blogger.com/' }` headers.
-
-### `Mp4UploadExtractor`
-
-Extracts direct MP4 URLs from `mp4upload.com` embed pages.
+### `Chapter`
 
 ```ts
-class Mp4UploadExtractor extends BaseExtractor {
-  readonly id = 'mp4upload';
-  static matches(url: string): boolean; // true for mp4upload.com URLs
-  extract(embedUrl: string): Promise<IVideoPayload[]>;
+interface Chapter {
+  id: string; // opaque — pass to sdk.pages()
+  mediaId: string;
+  number: number;
+  title?: string;
+  source: string;
 }
 ```
 
-Parses the `player.src({ src: "https://...video.mp4" })` line from the embed HTML. Returned URLs require `{ Referer: 'https://mp4upload.com/' }`.
-
-### `GenericHlsExtractor`
-
-Best-effort extractor that scans any embed page for a `.m3u8` or `.mp4` URL.
+### `Stream`
 
 ```ts
-class GenericHlsExtractor extends BaseExtractor {
-  readonly id = 'generic-hls';
-  extract(embedUrl: string): Promise<IVideoPayload[]>;
+interface Stream {
+  url: string;
+  origin: { host: string; url: string; proxied: boolean };
+  isHls: boolean;
+  qualities: { label: '1080p' | '720p' | '480p' | '360p' | 'auto'; url: string }[];
+  language: 'sub' | 'dub' | 'raw';
+  subtitles: Subtitle[];
+  headers?: Record<string, string>;
+  adjacent: {
+    prev?: { id: string; number: number };
+    next?: { id: string; number: number };
+  };
 }
 ```
 
-Prefers `.m3u8` over `.mp4`. Handles JSON-embedded URLs with escaped slashes. Cannot decrypt obfuscated players (filemoon, streamwish, ok.ru). Returns `[]` if nothing matches.
+`origin.host` is the CDN hostname (never parse `url` to get it). `proxied: true` when the URL goes through the SDK's proxy endpoint.
 
-### `VidstreamingExtractor`
-
-Handles vidstreaming.io / gogoplay embeds with AES-CBC decryption.
+### `Pages`
 
 ```ts
-class VidstreamingExtractor extends BaseExtractor {
-  readonly id = 'vidstreaming';
-  extract(embedUrl: string): Promise<IVideoPayload[]>;
+interface Pages {
+  pages: { url: string; origin: { host: string }; width?: number; height?: number }[];
+  adjacent: {
+    prev?: { id: string; number: number };
+    next?: { id: string; number: number };
+  };
 }
 ```
 
-**Flow:**
-
-1. Fetch the embed page. Extract encryption key, IV, and decryption key from `container-N` / `videocontent-N` class names.
-2. Decrypt the `data-value` attribute with AES-CBC using the encryption key.
-3. Encrypt the `id` query param with AES-CBC.
-4. GET `{host}/encrypt-ajax.php?{decrypted_data}&id={encrypted_id}&alias={contentId}` with `X-Requested-With: XMLHttpRequest`.
-5. Decrypt the `data` field of the JSON response with AES-CBC using the decryption key.
-6. Parse the resulting JSON: `source` and `source_bk` arrays each contain `{ file, label }` entries.
-
----
-
-## HlsUtils
+### `Subtitle`
 
 ```ts
-class HlsUtils {
-  static rewriteManifest(manifestText: string, playlistUrl: string, httpClient: HttpClient): string;
+interface Subtitle {
+  url: string;
+  language: string; // BCP-47 (e.g. 'en', 'pt-BR')
+  label: string; // human-readable ('English')
+  format: 'vtt' | 'srt' | 'ass';
 }
 ```
 
-Rewrites every URI in an `.m3u8` manifest to route through the `HttpClient`'s configured proxy:
-
-- Plain URI lines (chunks, sub-playlists)
-- `URI="..."` attributes inside `#EXT-X-KEY`, `#EXT-X-MAP`, and similar tags
-- Relative URIs are first resolved to absolute using `playlistUrl`
-
-Returns the manifest unchanged if no proxy is configured on the client.
-
----
-
-## DomRegistry
+### `List<T>`
 
 ```ts
-class DomRegistry {
-  static register(customParser: IDomParser): void;
-  static getParser(): IDomParser;
-  static parse(html: string): IDomElement;
+interface List<T> {
+  items: T[];
+  nextCursor?: string; // undefined when exhausted
+  total?: number;
 }
 ```
 
-Global singleton parser used by all providers that scrape HTML. The default is `BrowserDomParser`, which wraps `globalThis.DOMParser`.
-
-`linkedom` is registered automatically on import in Node environments: no setup is needed. `DomRegistry.register()` is only needed when you want to swap in a fully custom parser.
-
-**Custom parser:**
+### `SourceInfo`
 
 ```ts
-import { DomRegistry, IDomParser, IDomElement } from 'anime-sdk';
-
-class MyParser implements IDomParser {
-  parse(html: string): IDomElement {
-    /* ... */
-  }
+interface SourceInfo {
+  id: string;
+  status: 'available' | 'incompatible' | 'error';
+  episodeCount?: number;
+  successRate?: number; // rolling 0–1 from last 20 calls
 }
-
-DomRegistry.register(new MyParser());
 ```
 
-### `IDomElement` / `IDomParser`
+### `ProgressiveResult<T>`
 
 ```ts
-interface IDomParser {
-  parse(html: string): IDomElement;
-}
-
-interface IDomElement {
-  querySelector(selector: string): IDomElement | null;
-  querySelectorAll(selector: string): IDomElement[];
-  getAttribute(name: string): string | null;
-  readonly textContent: string | null;
-  readonly outerHTML: string;
-  readonly innerHTML: string;
+interface ProgressiveResult<T> extends AsyncIterable<T>, PromiseLike<T[]> {
+  cancel(): void;
 }
 ```
 
 ---
 
-## startServer
+## Errors
+
+### `AniError`
 
 ```ts
-function startServer(options: ServerOptions): http.Server;
-
-interface ServerOptions {
-  providers: BaseProvider[];
-  /** Metadata providers exposed under `/meta/*`. */
-  metaProviders?: BaseMetadataProvider[];
-  port?: number; // default: 3000
-  auth?: { token: string };
-  proxy?: boolean;
-  /** Explicit proxy base. When omitted, derived from each request's
-   *  Host header (+ X-Forwarded-Proto) — so the SDK works behind
-   *  reverse proxies without configuration. */
-  proxyBase?: string;
-  /** When set, /proxy requires an HMAC-SHA256 `sig` query parameter
-   *  on every request. The server signs URLs it emits automatically. */
-  proxySignSecret?: string;
-  /** Suffix-matched SSRF allowlist. Targets outside the list return 403. */
-  proxyAllowedHosts?: string[];
-  cache?: SdkCache;
+class AniError extends Error {
+  readonly code: AniErrorCode;
+  readonly source?: string; // source id, when known
+  readonly retryable: boolean;
+  readonly cause?: unknown;
 }
 ```
 
-Launches a Node `http.Server`. Returns the server instance so you can call `server.close()`. All requests must be `GET`; all responses are JSON. See [HTTP Server](/docs/http-server/) for full route documentation and [Stream Proxy](/docs/proxy/) for the proxy behaviour.
+### `AniErrorCode`
 
-Routes:
+```ts
+const AniErrorCode = {
+  SourceUnavailable: 'SourceUnavailable', // upstream unreachable
+  NoStream: 'NoStream', // no playable URL found
+  RegionBlocked: 'RegionBlocked', // geo-restricted content
+  RateLimited: 'RateLimited', // rate limit hit
+  NotFound: 'NotFound', // title/episode not found
+  Cancelled: 'Cancelled', // AbortSignal fired
+  BadId: 'BadId', // malformed opaque id
+} as const;
+```
 
-- **Content provider**: `/search`, `/content`, `/stream`, `/tracks`
-- **Metadata layer**: `/meta/search`, `/meta/info`, `/meta/content`, `/meta/stream`, `/meta/tracks`, `/meta/browse`
-- **Discovery**: `/health`, `/openapi.json`
-- **Downloads**: `/download/video`, `/download/video/progress`, `/download/video/file`, `/download/manga/page`, `/download/manga/chapter`, `/download/manga/chapter/progress`, `/download/manga/chapter/file`
-- **Proxy** (when `proxy: true`): `/proxy`
+---
+
+## Server
+
+### `startServerV2(opts?)`
+
+```ts
+import { startServerV2 } from 'anime-sdk/server';
+
+function startServerV2(opts?: {
+  port?: number; // default: 0 (random); set PORT env var for 3030
+  sdk?: Sdk; // default: createSdk()
+}): http.Server;
+```
+
+Returns an `http.Server`. `server.close()` to shut down. See [HTTP Server](/docs/http-server/) for all routes.
 
 ---
 
 ## Download utilities
 
-Functions for saving resolved streams to disk. Requires Node 20+; `ffmpeg` on `PATH` for HLS video downloads only.
-
-### `downloadVideo`
+### `downloadVideo(stream, outputPath, opts?)`
 
 ```ts
+import { downloadVideo } from 'anime-sdk';
+
 function downloadVideo(
-  streams: IVideoPayload | IVideoPayload[],
+  stream: Stream,
   outputPath: string,
-  options?: DownloadVideoOptions,
-): Promise<DownloadVideoResult>;
+  opts?: {
+    onProgress?: (info: { phase: string; detail?: string }) => void;
+    timeoutMs?: number; // default: 300_000 (5 min)
+  },
+): Promise<{ outputPath: string; fileSize: number }>;
 ```
 
-Downloads an anime episode to a `.mp4` file. Accepts a single stream or an array: if an array, each candidate is tried in order until one succeeds. Throws with a combined error message if all fail.
+HLS: downloads segments, muxes with `ffmpeg`. MP4: streams directly to disk.
 
-- **HLS streams**: downloads segments, strips PNG-wrapped bytes, concatenates into a `.ts` file, then calls `ffmpeg -c copy` to mux to MP4.
-- **Direct MP4**: streams to disk via `fetch`.
+### `downloadMangaChapter(pages, outputPath, opts?)`
 
 ```ts
-interface DownloadVideoOptions {
-  onProgress?: (info: { phase: string; detail?: string }) => void;
-  timeoutMs?: number; // default 300_000 (5 min)
-}
+import { downloadMangaChapter } from 'anime-sdk';
 
-interface DownloadVideoResult {
-  outputPath: string;
-  stream: IVideoPayload; // the candidate that succeeded
-  fileSize: number; // bytes
-}
+function downloadMangaChapter(
+  pages: Pages,
+  outputPath: string,
+  opts?: {
+    onProgress?: (info: { downloaded: number; total: number }) => void;
+    timeoutMs?: number; // per page; default: 30_000
+  },
+): Promise<{ outputPath: string; pageCount: number; fileSize: number }>;
 ```
 
-Progress `phase` values: `'resolving'` → `'downloading'` → `'muxing'` → `'complete'`.
+Packages all pages as an uncompressed `.zip` archive.
 
-### `downloadMangaPage`
+### `downloadMangaPage(pages, pageIndex, outputDir, opts?)`
 
 ```ts
+import { downloadMangaPage } from 'anime-sdk';
+
 function downloadMangaPage(
-  pages: IMangaPayload,
+  pages: Pages,
   pageIndex: number,
   outputDir: string,
-  options?: DownloadMangaPageOptions,
-): Promise<DownloadMangaPageResult>;
-```
-
-Downloads a single manga page. The filename is auto-generated as `page_<NNN><ext>` where the extension is inferred from the `Content-Type` header.
-
-```ts
-interface DownloadMangaPageOptions {
-  headers?: Record<string, string>; // override the headers on IMangaPayload
-  timeoutMs?: number; // default 30_000
-}
-
-interface DownloadMangaPageResult {
-  outputPath: string;
-  pageIndex: number;
-  fileSize: number;
-  contentType: string;
-}
-```
-
-### `downloadMangaChapter`
-
-```ts
-function downloadMangaChapter(
-  pages: IMangaPayload,
-  outputPath: string,
-  options?: DownloadMangaChapterOptions,
-): Promise<DownloadMangaChapterResult>;
-```
-
-Downloads all pages and packages them as an uncompressed `.zip` archive (STORE method: images are already compressed). No external dependencies.
-
-```ts
-interface DownloadMangaChapterOptions {
-  onProgress?: (info: { downloaded: number; total: number }) => void;
-  timeoutMs?: number; // per page; default 30_000
-}
-
-interface DownloadMangaChapterResult {
-  outputPath: string;
-  pageCount: number;
-  fileSize: number; // total ZIP size in bytes
-}
-```
-
-### HLS helpers
-
-Low-level utilities exported for custom pipelines:
-
-```ts
-// Parse variant playlist URLs from a master playlist
-parseHlsMaster(content: string, baseUrl: string): string[]
-
-// Parse segment descriptors from a media playlist
-parseHlsSegments(content: string, baseUrl: string): Array<{ url: string; duration: number }>
-
-// Infer file extension from Content-Type
-detectImageExtension(contentType: string): string
-
-// CRC-32 checksum (used by the ZIP writer)
-crc32(buf: Buffer): number
-
-// Build an uncompressed ZIP buffer
-createZipBuffer(entries: Array<{ filename: string; data: Buffer }>): Buffer
+  opts?: { timeoutMs?: number },
+): Promise<{ outputPath: string; fileSize: number; contentType: string }>;
 ```
 
 ---
 
-## Subtitle utilities
+## Internal utilities (not exported from main entry)
 
-Exported helpers used internally by `AnimeParadiseProvider` and `startServer`; available for custom providers and self-hosted setups.
+These are still exported for custom integrations but are not part of the primary API:
 
-```ts
-// Normalise an arbitrary array of {src|url, label, type|format} entries into
-// ISubtitleTrack[]. Non-http(s) entries (Drive IDs, etc.) are dropped.
-normalizeSubtitleEntries(entries: unknown): ISubtitleTrack[]
-
-// Wrap a subtitle URL through the SDK's /proxy endpoint. Forces
-// Content-Type: text/vtt on VTT files so browsers parse them correctly.
-proxifySubtitleUrl(
-  proxyBase: string,
-  track:     ISubtitleTrack,
-  options?:  { headers?: Record<string, string>; contentType?: string }
-): string
-
-// BCP-47 inference from a human label (best-effort).
-labelToBcp47(label: string): string
-```
-
----
-
-## Crypto utilities
-
-Exported for use in custom providers.
-
-```ts
-// AES-CBC decrypt: returns plaintext string
-aesDecrypt(ciphertextBase64: string, keyStr: string, ivStr: string): Promise<string>
-
-// AES-CBC encrypt: returns base64 string
-aesEncrypt(plaintext: string, keyStr: string, ivStr: string): Promise<string>
-
-// SHA-256 hash
-sha256(text: string): Promise<Uint8Array>
-
-// AES-CTR decrypt (used by AllmangaProvider)
-aesDecryptCtr(ciphertext: Uint8Array, key: Uint8Array, iv: Uint8Array): Promise<Uint8Array>
-```
-
-All functions use `globalThis.crypto.subtle` (available in Node 20+ and all modern browsers).
+- `HlsUtils.rewriteManifest(manifestText, playlistUrl, httpClient)` — rewrites `.m3u8` URIs through a proxy
+- `DomRegistry.parse(html)` — singleton HTML parser backed by `linkedom`
+- `normalizeSubtitleEntries(entries)` — normalize arbitrary subtitle shapes to `ISubtitleTrack[]`
+- `proxifySubtitleUrl(proxyBase, track, opts?)` — wrap a subtitle URL through `/proxy`

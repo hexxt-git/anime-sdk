@@ -1,204 +1,203 @@
 ---
 title: Contributing
-description: How to add a new provider or extractor, and what the live E2E test suite expects.
+description: How to add a new source or extractor, and what the live E2E test suite expects.
 ---
 
 ## What we want
 
-### New providers
+### New sources
 
 The highest-value contribution. A good target is a site that:
 
 - Has a public search endpoint (no login required)
 - Hosts direct HLS or MP4 streams, possibly behind a simple embed layer
-- Covers a language or catalogue not already served by the three existing providers
+- Covers a language or catalogue not already served by the existing sources
 
-### Bug fixes for existing providers
+### Bug fixes for existing sources
 
-Site layouts change. If a provider's scraping logic breaks because the upstream site updated its HTML, a targeted fix with a passing E2E test is always welcome. Open an issue first if the fix is large.
+Site layouts change. If a source's scraping logic breaks because the upstream site updated its HTML or API, a targeted fix with a passing E2E test is always welcome.
 
 ### New extractors
 
-Add one when the embed format is genuinely novel: not handled by `GenericHlsExtractor`, `Mp4UploadExtractor`, `BloggerExtractor`, or `VidstreamingExtractor`. Common cases: new obfuscation schemes (encrypted player config, custom XOR), embed hosts that require a multi-step auth flow, or platforms that gate streams behind a non-standard API.
-
-### Metadata provider improvements
-
-Extending `MalMeta` / `KitsuMeta` toward AniList's parity (characters with voice actors, staff, recommendations), AniList batch fetching (`Page.media(id_in: [...])`), or richer Anify/arm-server integration. Any new field must be live-tested against the real upstream.
-
-### Mapping-client improvements
-
-Better fuzzy-match heuristics for tricky titles (multi-season shows, abbreviations, romanization variants); provider-specific `lookupByMapping` implementations for sites that index by AniList/MAL ID directly; new external mapping sources.
-
-### Transport and HTTP server improvements
-
-- Proxy mode extensions (new `proxyType` variants, header-based routing)
-- Better `curl` fallback diagnostics
-- Custom `HttpTransport` implementations (Undici dispatcher, Workers fetch, Bun compatibility)
-- HTTP server: new routes, streaming responses, per-provider auth
-
-### Unit / pure-logic tests
-
-Edge cases in `HlsUtils.rewriteManifest`, extractor HTML fixtures, language inference, URN helpers, similarity scoring, rate limiter, retry policy. These run in CI without a network.
+Add one when the embed format isn't handled by `GenericHlsExtractor`, `Mp4UploadExtractor`, `BloggerExtractor`, or `VidstreamingExtractor`.
 
 ---
 
 ## What's out of scope
 
-| Area                                        | Why                                                                                                                                                                                                                                             |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Browser / frontend support**              | The SDK depends on `child_process` (curl fallback), Node-specific `crypto.subtle` usage, and shell-out for E2E tests. Browser support would require a fundamentally different transport layer and likely wouldn't work due to CORS constraints. |
-| **UI components or players**                | anime-sdk is a headless library. Rendering is out of scope.                                                                                                                                                                                     |
-| **Login-gated or paywall sites**            | anime-sdk is for publicly accessible streams. Sites that require accounts are out of scope.                                                                                                                                                     |
-| **Caching or rate-limiting layers**         | Those belong in the application layer, not the SDK.                                                                                                                                                                                             |
-| **CLI wrappers or download scripts**        | Out of scope: use the HTTP server or call the SDK directly.                                                                                                                                                                                     |
-| **Mocked E2E tests**                        | All E2E tests must hit live sites. A provider test that passes with mocks but fails against the real site is worse than no test.                                                                                                                |
-| **Tests with graceful skip-on-unreachable** | A skipped test is a lie. A test must pass for real or be deleted. See `CLAUDE.md` for the non-negotiable testing rules.                                                                                                                         |
+| Area                                        | Why                                                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Browser / frontend support**              | The SDK depends on `child_process`, Node-specific `crypto.subtle`, and shell-out for E2E tests.   |
+| **UI components or players**                | anime-sdk is a headless library.                                                                  |
+| **Login-gated or paywall sites**            | Only publicly accessible streams.                                                                 |
+| **Mocked E2E tests**                        | All E2E tests must hit live sites. A test that passes with mocks but fails for real is worthless. |
+| **Tests with graceful skip-on-unreachable** | A skipped test is a lie. Pass for real or delete it.                                              |
 
 ---
 
-## Overview
+## Architecture overview
 
-anime-sdk has four layers:
+- **`src/internal/`**: `HttpClient`, `DomRegistry`, `HlsUtils`, `MappingClient`, `encodeId`/`decodeId`. Rarely changes for new sources.
+- **`src/extractors/`**: stateless embed parsers. Add one when an embed platform is genuinely novel.
+- **`src/sources/`**: site-specific adapters. One `Source` interface, optional capability methods.
 
-- **Transport** (`src/transport/`): `HttpClient`, `HttpTransport`, `RateLimiter`, `withRetry`, `DomRegistry`, `HlsUtils`. Rarely needs changes for new providers.
-- **Extractors** (`src/extractors/`): stateless embed parsers. Add one when an embed platform is genuinely novel.
-- **Providers** (`src/providers/`): site-specific adapters. This is where most content-provider contributions live.
-- **Metadata** (`src/meta/`): catalogue-level data (AniList / MAL / Kitsu) plus `MappingClient` for cross-source mapping. Touch this layer for new catalogues or mapping heuristics.
-
-All relative imports in `src/` must include the `.js` extension (`import { X } from './foo.js'`). TypeScript is configured with `module: NodeNext`.
+All relative imports in `src/` must include the `.js` extension (`import { X } from './foo.js'`).
 
 ---
 
-## Adding a provider
+## Adding a source
 
-### 1. Create `src/providers/MyProvider.ts`
+### 1. Create `src/sources/mysource.ts`
 
 ```ts
-import { BaseProvider } from './BaseProvider.js';
-import { HttpClient } from '../transport/http.js';
-import { DomRegistry } from '../transport/dom.js';
-import type {
-  IMediaSearchResult,
-  IContentUnit,
-  ResolvedMediaStream,
-  MediaCatalogType,
-  ContentLanguage,
-} from '../types/index.js';
+import { HttpClient } from '../internal/http.js';
+import { DomRegistry } from '../internal/dom.js';
+import { encodeId, decodeId } from '../internal/id.js';
+import type { Media, Episode, Stream, List } from '../types.js';
+import type { Source, SourceCallOpts } from './base.js';
 
-export interface MyProviderOptions {
-  baseUrl?: string;
-}
+export class MySource implements Source {
+  readonly id = 'mysource';
+  readonly kinds = ['anime'] as const;
+  readonly caps = { search: true, episodes: true, stream: true } as const;
 
-export class MyProvider extends BaseProvider {
-  public readonly id = 'myprovider';
-  public readonly supportedTypes: MediaCatalogType[] = ['ANIME'];
   private baseUrl = 'https://example-anime-site.com';
 
-  constructor(http: HttpClient, options: MyProviderOptions = {}) {
-    super(http);
-    if (options.baseUrl) this.baseUrl = options.baseUrl;
-  }
+  constructor(private http: HttpClient) {}
 
-  public async search(query: string): Promise<IMediaSearchResult[]> {
-    const res = await this.http.get(`${this.baseUrl}/search?q=${encodeURIComponent(query)}`);
+  async search(query: string, _kind: 'anime' | 'manga', opts: SourceCallOpts): Promise<Media[]> {
+    const res = await this.http.get(`${this.baseUrl}/search?q=${encodeURIComponent(query)}`, {
+      signal: opts.signal,
+    });
     if (res.status !== 200) throw new Error(`Search failed: ${res.status}`);
-
-    const html = await res.text();
-    const doc = DomRegistry.parse(html);
-
-    return doc.querySelectorAll('.anime-card').map((card) => ({
-      id: card.querySelector('a')?.getAttribute('href') ?? '',
-      title: (card.querySelector('h3')?.textContent ?? '').trim(),
-      catalogType: 'ANIME',
-      providerId: this.id,
-    }));
+    const doc = DomRegistry.parse(await res.text());
+    return doc.querySelectorAll('.anime-card').map(
+      (card): Media => ({
+        id: encodeId({
+          t: 'media',
+          s: this.id,
+          r: card.querySelector('a')?.getAttribute('href') ?? '',
+        }),
+        kind: 'anime',
+        title: { preferred: (card.querySelector('h3')?.textContent ?? '').trim() },
+        catalogues: [this.id],
+        playbackSources: [this.id],
+        mappings: {},
+      }),
+    );
   }
 
-  public async fetchContentUnits(mediaId: string): Promise<IContentUnit[]> {
-    const res = await this.http.get(`${this.baseUrl}${mediaId}`);
-    if (res.status !== 200) throw new Error(`Failed to fetch: ${res.status}`);
-
-    const html = await res.text();
-    const doc = DomRegistry.parse(html);
-
-    return doc.querySelectorAll('.episode-item a').map((a, i) => ({
-      id: a.getAttribute('href') ?? '',
-      title: `Episode ${i + 1}`,
-      number: i + 1,
-      availableLanguages: ['sub'],
-    }));
+  async episodes(
+    mediaId: string,
+    opts: SourceCallOpts & { cursor?: string; limit?: number },
+  ): Promise<List<Episode>> {
+    const res = await this.http.get(`${this.baseUrl}${mediaId}`, { signal: opts.signal });
+    if (res.status !== 200) throw new Error(`Failed: ${res.status}`);
+    const doc = DomRegistry.parse(await res.text());
+    return {
+      items: doc.querySelectorAll('.episode-item a').map(
+        (a, i): Episode => ({
+          id: encodeId({ t: 'episode', s: this.id, r: a.getAttribute('href') ?? '' }),
+          mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
+          number: i + 1,
+          title: `Episode ${i + 1}`,
+          languages: ['sub'],
+          qualities: ['auto'],
+          source: this.id,
+        }),
+      ),
+    };
   }
 
-  public async resolveStream(
-    unitId: string,
-    language?: ContentLanguage,
-  ): Promise<ResolvedMediaStream> {
-    const res = await this.http.get(`${this.baseUrl}${unitId}`);
-    if (res.status !== 200) throw new Error(`Failed to fetch: ${res.status}`);
-
+  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream> {
+    const { r: rawUnit } = decodeId(episodeId);
+    const res = await this.http.get(`${this.baseUrl}${rawUnit}`, { signal: opts.signal });
+    if (res.status !== 200) throw new Error(`Failed: ${res.status}`);
     const html = await res.text();
     const embedUrl = html.match(/src=["'](https:\/\/embed\.example\.com\/[^"']+)["']/)?.[1];
     if (!embedUrl) throw new Error('No embed URL found');
 
-    // Use an existing extractor:
     const { GenericHlsExtractor } = await import('../extractors/GenericHlsExtractor.js');
     const extractor = new GenericHlsExtractor(this.http);
-    const streams = await extractor.extract(embedUrl);
-    if (streams.length === 0) throw new Error('No streams extracted');
+    const payloads = await extractor.extract(embedUrl);
+    if (payloads.length === 0) throw new Error('No streams extracted');
 
-    return { type: 'video', streams };
+    const p = payloads[0];
+    let host = '';
+    try {
+      host = new URL(p.sourceUrl).hostname;
+    } catch {}
+    return {
+      url: p.sourceUrl,
+      origin: { host, url: p.sourceUrl, proxied: false },
+      isHls: p.isHLS,
+      qualities: payloads.map((q) => ({ label: q.quality, url: q.sourceUrl })),
+      language: 'sub',
+      subtitles: [],
+      headers: p.headers,
+      adjacent: {},
+    };
   }
 }
 ```
 
-### 2. Export from `src/index.ts`
+### 2. Register in `src/sdk.ts`
+
+Add to the `buildSources()` array:
 
 ```ts
-export * from './providers/MyProvider.js';
+import { MySource } from './sources/mysource.js';
+
+function buildSources(http: HttpClient, enabled: ReadonlyArray<string>) {
+  const all = [
+    // ...existing sources...
+    new MySource(http),
+  ];
+  return all.filter((s) => set.has(s.id));
+}
 ```
+
+And add the id to `ALL_SOURCE_IDS`.
 
 ### 3. Add a live E2E test
 
-Create `tests/e2e/myprovider.test.ts`. The test must resolve a real stream and pass it to `captureStreamScreenshot`: no mocking allowed. The function walks candidates in order and extracts a frame with ffmpeg.
+Create `tests/e2e/mysource.test.ts`. No mocking allowed.
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { HttpClient, MyProvider } from '../../src/index.js';
-import { captureStreamScreenshot } from './screenshotHelper.js';
+import { HttpClient } from '../../src/internal/http.js';
+import { MySource } from '../../src/sources/mysource.js';
+import { decodeId } from '../../src/internal/id.js';
+import { captureStreamScreenshot, streamToPayload } from './screenshotHelper.js';
 
-describe('MyProvider', () => {
-  it(
-    'resolves a stream and screenshots it',
-    async () => {
-      const provider = new MyProvider(new HttpClient());
+describe('MySource E2E', () => {
+  it('searches, fetches episodes, resolves a stream, and screenshots it', async () => {
+    const http = new HttpClient({ timeoutMs: 25000 });
+    const source = new MySource(http);
 
-      const shows = await provider.search('Frieren');
-      expect(shows.length).toBeGreaterThan(0);
+    const results = await source.search('Frieren', 'anime', {});
+    expect(results.length).toBeGreaterThan(0);
 
-      const eps = await provider.fetchContentUnits(shows[0].id);
-      expect(eps.length).toBeGreaterThan(0);
+    const decoded = decodeId(results[0].id);
+    const list = await source.episodes(decoded.r, {});
+    expect(list.items.length).toBeGreaterThan(0);
 
-      const result = await provider.resolveStream(eps[0].id);
-      expect(result.type).toBe('video');
-      if (result.type !== 'video') return;
+    const stream = await source.stream(list.items[0].id, {});
+    expect(stream.url).toBeTruthy();
 
-      // captureStreamScreenshot(providerId, streams): accepts IVideoPayload | IVideoPayload[]
-      const { outputPath } = await captureStreamScreenshot('myprovider', result.streams);
-      const stat = (await import('fs')).statSync(outputPath);
-      expect(stat.size).toBeGreaterThan(1024);
-    },
-    { timeout: 90_000 },
-  );
+    const result = await captureStreamScreenshot('mysource', streamToPayload(stream));
+    expect(result.outputPath).toMatch(/screenshot_mysource\.png$/);
+  }, 90000);
 });
 ```
 
-`captureStreamScreenshot` returns `{ outputPath, stream, attemptedCount }`. It writes to `scratch/screenshots/screenshot_myprovider.png`.
+`captureStreamScreenshot` writes to `scratch/screenshots/screenshot_mysource.png` and asserts the file is > 1 KB.
 
 ---
 
 ## Adding an extractor
 
-Add an extractor when the embed format isn't handled by `GenericHlsExtractor`, `Mp4UploadExtractor`, `BloggerExtractor`, or `VidstreamingExtractor`.
+Add one only when the embed format isn't handled by the four existing extractors.
 
 ### 1. Create `src/extractors/MyExtractor.ts`
 
@@ -209,7 +208,6 @@ import type { IVideoPayload } from '../types/index.js';
 export class MyExtractor extends BaseExtractor {
   public readonly id = 'myextractor';
 
-  // Optional: static URL matcher so providers can guard before calling extract()
   static matches(url: string): boolean {
     return /(?:^|\.)myembedhost\.com\//i.test(url);
   }
@@ -218,35 +216,21 @@ export class MyExtractor extends BaseExtractor {
     const res = await this.http.get(embedUrl, {
       headers: { Referer: 'https://referring-site.com/' },
     });
-    if (res.status !== 200) return []; // return [] on failure, never throw
+    if (res.status !== 200) return []; // always return [], never throw
 
-    const html = await res.text();
-    const match = html.match(/"file"\s*:\s*"(https?:\/\/[^"]+\.m3u8)"/);
+    const match = (await res.text()).match(/"file"\s*:\s*"(https?:\/\/[^"]+\.m3u8)"/);
     if (!match) return [];
 
-    return [
-      {
-        sourceUrl: match[1],
-        isHLS: true,
-        quality: 'auto',
-        headers: { Referer: embedUrl },
-      },
-    ];
+    return [{ sourceUrl: match[1], isHLS: true, quality: 'auto', headers: { Referer: embedUrl } }];
   }
 }
 ```
 
 **Rules:**
 
-- Always return `[]` when the extractor can't handle a URL: never throw.
-- Stay stateless: extractors are constructed fresh by providers per-request.
-- Include `Referer` and `User-Agent` headers in returned payloads when the CDN requires them.
-
-### 2. Export from `src/index.ts`
-
-```ts
-export * from './extractors/MyExtractor.js';
-```
+- Return `[]` on failure — never throw.
+- Stay stateless.
+- Include `Referer`/`User-Agent` in returned payloads when the CDN requires them.
 
 ---
 
@@ -259,34 +243,25 @@ npm run test:run
 # Just E2E tests
 npx vitest run tests/e2e
 
-# Single provider
-npx vitest run tests/e2e/myprovider.test.ts
+# Single source
+npx vitest run tests/e2e/mysource.test.ts
 
-# Single test by name pattern
+# Single test by name
 npx vitest run -t "resolves a stream"
 ```
 
-E2E tests have a 90-second timeout. They require an internet connection. Screenshots land in `scratch/screenshots/` (gitignored).
-
-**Build:**
-
-```sh
-npm run build   # tsc → dist/ (ESM, NodeNext)
-```
-
-`tests/`, `references/`, and `dist/` are excluded from the TypeScript build.
+E2E tests have a 90-second timeout and require an internet connection.
 
 ---
 
-## Checklist for a new provider
+## Checklist for a new source
 
-- [ ] Extends `BaseProvider`, sets `id` and `supportedTypes`
-- [ ] Accepts `HttpClient` in constructor; optionally accepts provider-specific options via an interface
-- [ ] `search` returns `IMediaSearchResult[]` with `id`, `title`, `catalogType`, `providerId`
-- [ ] `fetchContentUnits` returns `IContentUnit[]` sorted by `number`; each unit sets `availableLanguages` (a non-empty subset of `ContentLanguage`)
-- [ ] `resolveStream` accepts a `language` parameter, returns `ResolvedMediaStream`: at minimum `{ type: 'video', streams: [...] }`
-- [ ] If the provider has external subtitle tracks, populate `IVideoPayload.subtitles` (use `normalizeSubtitleEntries` from `utils/subtitles.js` to massage upstream shapes)
-- [ ] Optional: implement `fetchUnitTracks` when the provider can describe subtitle/quality availability cheaper than a full `resolveStream`
+- [ ] Implements `Source` interface from `src/sources/base.ts`
+- [ ] Sets `id`, `kinds`, `caps` as `readonly`
+- [ ] Uses `encodeId`/`decodeId` for all external IDs
+- [ ] All async methods accept `SourceCallOpts` and forward `signal`
+- [ ] `stream()` returns `Stream` with `url`, `origin`, `isHls`, `qualities`, `language`, `subtitles`, `adjacent`
+- [ ] Registered in `buildSources()` in `src/sdk.ts`
+- [ ] Added to `ALL_SOURCE_IDS` in `src/sdk.ts`
 - [ ] All imports use `.js` extension
-- [ ] Exported from `src/index.ts`
-- [ ] Live E2E test using `captureStreamScreenshot`: no mocking, 90s timeout
+- [ ] Live E2E test using `captureStreamScreenshot` / page URL check — no mocking, 90s timeout

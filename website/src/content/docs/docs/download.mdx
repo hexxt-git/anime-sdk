@@ -7,168 +7,96 @@ The SDK ships built-in download utilities for both anime and manga. No extra dep
 
 ## Anime: `downloadVideo`
 
-`downloadVideo` accepts one or more `IVideoPayload` candidates from `resolveStream` and saves a playable `.mp4` file.
-
-- **HLS streams**: the playlist is walked (master → variant → segments), each segment is downloaded and concatenated into a temporary `.ts` file, then `ffmpeg -c copy` muxes it to MP4.
-- **Direct MP4 streams**: downloaded via `fetch` streaming directly to disk.
-
 ```ts
-import { HttpClient, AllmangaProvider, downloadVideo } from 'anime-sdk';
+import { createSdk, downloadVideo } from 'anime-sdk';
 
-const client = new HttpClient();
-const provider = new AllmangaProvider(client);
+const sdk = createSdk();
 
-const shows = await provider.search('Frieren');
-const eps = await provider.fetchContentUnits(shows[0].id);
-const result = await provider.resolveStream(eps[0].id, 'sub');
+const results = await sdk.search('Frieren', { kind: 'anime' });
+const { items: episodes } = await sdk.episodes(results[0]);
+const stream = await sdk.stream(episodes[0], { language: 'sub' });
 
-if (result.type === 'video') {
-  const download = await downloadVideo(result.streams, './episode-1.mp4', {
-    onProgress: ({ phase, detail }) => console.log(`[${phase}] ${detail ?? ''}`),
-  });
-
-  console.log(`Saved ${download.fileSize} bytes → ${download.outputPath}`);
-}
+const download = await downloadVideo(stream, './episode-1.mp4', {
+  onProgress: ({ phase, detail }) => console.log(`[${phase}] ${detail ?? ''}`),
+});
+console.log(`Saved ${download.fileSize} bytes → ${download.outputPath}`);
 ```
 
-### Fallback behaviour
-
-Pass the full `streams` array and `downloadVideo` tries each candidate in order until one succeeds. If all fail, it throws with a combined error message listing every failure.
-
-```ts
-// Single candidate: throws immediately on failure
-await downloadVideo(result.streams[0], './episode-1.mp4');
-
-// All candidates: tries each in order
-await downloadVideo(result.streams, './episode-1.mp4');
-```
+- **HLS streams**: walks master → variant → segments, concatenates into `.ts`, then `ffmpeg -c copy` muxes to MP4.
+- **Direct MP4**: streams to disk via `fetch`.
 
 ### Progress reporting
 
 ```ts
-await downloadVideo(streams, './episode-1.mp4', {
+await downloadVideo(stream, './episode-1.mp4', {
   onProgress: ({ phase, detail }) => {
     // phase: 'resolving' | 'downloading' | 'muxing' | 'complete'
-    // detail: human-readable string (segment count, output path, etc.)
     console.log(`[${phase}] ${detail ?? ''}`);
   },
   timeoutMs: 600_000, // 10 min; default 300_000 (5 min)
 });
 ```
 
-Phases in order:
-
-| Phase         | When it fires                                              |
-| ------------- | ---------------------------------------------------------- |
-| `resolving`   | Before each candidate is attempted                         |
-| `downloading` | As HLS segments or MP4 bytes are fetched                   |
-| `muxing`      | While `ffmpeg` is converting the `.ts` concat to `.mp4`    |
-| `complete`    | After the file is written and verified (size > 1 KB check) |
-
 ### Requirements
 
-- `ffmpeg` must be on your `PATH` (only needed for HLS streams; direct MP4s use `fetch` only).
-- The output directory is created automatically if it doesn't exist.
-- A minimum file size of 1 KB is asserted after writing; candidates that produce a smaller file are retried.
-
----
-
-## Manga: single page
-
-```ts
-import { MangadexProvider, HttpClient, downloadMangaPage } from 'anime-sdk';
-
-const client = new HttpClient();
-const provider = new MangadexProvider(client);
-
-const books = await provider.search('Frieren');
-const chapters = await provider.fetchContentUnits(books[0].id);
-const result = await provider.resolveStream(chapters[0].id);
-
-if (result.type === 'manga') {
-  const page = await downloadMangaPage(result.pages, 0, './chapter-1/', {
-    timeoutMs: 30_000,
-  });
-  // Saves ./chapter-1/page_001.jpg  (extension is auto-detected from Content-Type)
-  console.log(page.outputPath, page.fileSize);
-}
-```
-
-The filename is `page_<NNN><ext>` where `<ext>` is inferred from the `Content-Type` header (`.jpg`, `.png`, `.webp`, `.gif`, `.avif`). Pages are 1-indexed and zero-padded to three digits.
+- `ffmpeg` must be on `PATH` (only for HLS; direct MP4 uses `fetch`).
+- Output directory is created automatically.
 
 ---
 
 ## Manga: full chapter as ZIP
 
 ```ts
-import { MangadexProvider, HttpClient, downloadMangaChapter } from 'anime-sdk';
+import { createSdk, downloadMangaChapter } from 'anime-sdk';
 
-const client = new HttpClient();
-const provider = new MangadexProvider(client);
+const sdk = createSdk();
 
-const books = await provider.search('Frieren');
-const chapters = await provider.fetchContentUnits(books[0].id);
-const result = await provider.resolveStream(chapters[0].id);
+const results = await sdk.search('Frieren', { kind: 'manga' });
+const { items: chapters } = await sdk.chapters(results[0]);
+const pages = await sdk.pages(chapters[0]);
 
-if (result.type === 'manga') {
-  const zip = await downloadMangaChapter(result.pages, './chapter-1.zip', {
-    onProgress: ({ downloaded, total }) => {
-      process.stdout.write(`\r${downloaded}/${total} pages`);
-    },
-  });
-
-  console.log(`\nSaved ${zip.pageCount} pages (${zip.fileSize} bytes) → ${zip.outputPath}`);
-}
+const zip = await downloadMangaChapter(pages, './chapter-1.zip', {
+  onProgress: ({ downloaded, total }) => {
+    process.stdout.write(`\r${downloaded}/${total} pages`);
+  },
+});
+console.log(`\nSaved ${zip.pageCount} pages (${zip.fileSize} bytes) → ${zip.outputPath}`);
 ```
 
-Pages are downloaded in order and stored inside the ZIP as `001.jpg`, `002.png`, etc. The archive uses STORE (no compression): images are already compressed, so deflation would only add CPU cost with no size benefit.
-
-The ZIP writer is self-contained with no external dependencies and implements the ZIP specification directly using Node's `Buffer` APIs.
+Pages are stored inside the ZIP as `001.jpg`, `002.png`, etc. No external dependencies — the ZIP writer is self-contained.
 
 ---
 
-## Downloading via the metadata layer
-
-The download helpers consume `IVideoPayload[]` / `IMangaPayload`, which is
-what every `resolveStream` returns — including
-`BaseMetadataProvider.resolveStream`. So you can drive a download with an
-AniList URN + an episode number, letting the SDK resolve the
-cross-source mapping for you:
+## Manga: single page
 
 ```ts
-import { HttpClient, AnilistMeta, AllmangaProvider, downloadVideo } from 'anime-sdk';
+import { downloadMangaPage } from 'anime-sdk';
 
-const http = new HttpClient();
-const meta = new AnilistMeta(http);
-const allmanga = new AllmangaProvider(http);
-
-const result = await meta.resolveStream('anilist:1', 1, allmanga, 'sub');
-if (result.type === 'video') {
-  await downloadVideo(result.streams, './cowboy-bebop-ep1.mp4');
-}
+const page = await downloadMangaPage(pages, 0, './chapter-1/', { timeoutMs: 30_000 });
+// Saves ./chapter-1/page_001.jpg  (extension auto-detected from Content-Type)
+console.log(page.outputPath, page.fileSize);
 ```
 
 ---
 
 ## Batch download
 
-`downloadVideo` is safe to run concurrently per episode. Use `Promise.allSettled` to continue even if individual downloads fail:
+`downloadVideo` is safe to run concurrently:
 
 ```ts
-const episodes = await provider.fetchContentUnits(shows[0].id);
+const { items: episodes } = await sdk.episodes(media);
 
 const results = await Promise.allSettled(
   episodes.slice(0, 5).map(async (ep) => {
-    const stream = await provider.resolveStream(ep.id, 'sub');
-    if (stream.type !== 'video') return;
-    return downloadVideo(stream.streams, `./ep-${ep.number}.mp4`, {
+    const stream = await sdk.stream(ep, { language: 'sub' });
+    return downloadVideo(stream, `./ep-${ep.number}.mp4`, {
       onProgress: ({ phase }) => console.log(`ep${ep.number} [${phase}]`),
     });
   }),
 );
 
 for (const r of results) {
-  if (r.status === 'fulfilled') console.log('ok:', r.value?.outputPath);
+  if (r.status === 'fulfilled') console.log('ok:', r.value.outputPath);
   else console.error('failed:', r.reason);
 }
 ```
@@ -180,18 +108,16 @@ for (const r of results) {
 ```ts
 interface DownloadVideoOptions {
   onProgress?: (info: { phase: string; detail?: string }) => void;
-  timeoutMs?: number; // default 300_000 (5 min)
+  timeoutMs?: number; // default: 300_000 (5 min)
 }
 
 interface DownloadVideoResult {
   outputPath: string;
-  stream: IVideoPayload; // the candidate that succeeded
-  fileSize: number; // bytes
+  fileSize: number;
 }
 
 interface DownloadMangaPageOptions {
-  headers?: Record<string, string>; // override the headers on IMangaPayload
-  timeoutMs?: number; // default 30_000
+  timeoutMs?: number; // default: 30_000
 }
 
 interface DownloadMangaPageResult {
@@ -203,13 +129,13 @@ interface DownloadMangaPageResult {
 
 interface DownloadMangaChapterOptions {
   onProgress?: (info: { downloaded: number; total: number }) => void;
-  timeoutMs?: number; // per page; default 30_000
+  timeoutMs?: number; // per page; default: 30_000
 }
 
 interface DownloadMangaChapterResult {
   outputPath: string;
   pageCount: number;
-  fileSize: number; // total ZIP file size in bytes
+  fileSize: number;
 }
 ```
 
@@ -217,10 +143,8 @@ interface DownloadMangaChapterResult {
 
 ## Low-level helpers
 
-These are exported for custom download pipelines that need to work with HLS playlists directly.
-
 ```ts
-// Parse variant URLs from an HLS master playlist (lowest → highest quality order)
+// Parse variant URLs from an HLS master playlist
 parseHlsMaster(content: string, baseUrl: string): string[]
 
 // Parse segment URLs + durations from an HLS media playlist
@@ -229,9 +153,6 @@ parseHlsSegments(content: string, baseUrl: string): Array<{ url: string; duratio
 // Infer image extension from a Content-Type header
 detectImageExtension(contentType: string): '.jpg' | '.png' | '.webp' | '.gif' | '.bmp' | '.avif'
 
-// Compute CRC-32 for a Buffer (used by the ZIP writer)
-crc32(buf: Buffer): number
-
-// Create an uncompressed ZIP buffer from an array of { filename, data } entries
+// Create an uncompressed ZIP buffer from { filename, data } entries
 createZipBuffer(entries: Array<{ filename: string; data: Buffer }>): Buffer
 ```

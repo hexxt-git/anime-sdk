@@ -3,218 +3,203 @@ title: Getting Started
 description: Install anime-sdk and resolve your first anime stream in minutes.
 ---
 
-anime-sdk is a Typescript SDK that searches anime/manga catalogues (AniList, MAL, Kitsu), resolves direct video stream URLs and manga page URLs across multiple content providers, and lets you swap content providers without changing call sites.
-
-It has four layers: HTTP transport (with per-host rate limiting, retry, AbortSignal, and a pluggable curl fallback), extractors (embed parsers), content providers (site-specific scraping logic), and metadata providers (catalogue-level data with cross-source mapping). Everything connects through `HttpClient`.
+anime-sdk is a TypeScript SDK that searches anime and manga across 12 sources and resolves direct playable stream URLs and manga page URLs. One import, nine methods, plain POJO types.
 
 ## Requirements
 
-- **Node 20+** or **Bun**: native `fetch` and `crypto.subtle` are required
-- **ffmpeg**: only needed to run the live E2E test suite for anime streams
+- **Node 20+** or **Bun**: native `fetch` and `crypto.subtle` required
+- **ffmpeg**: only needed for the live E2E test suite
 
 ## Install
 
 ```sh
 npm install anime-sdk
-# -- or --
-pnpm add anime-sdk
-# -- or --
-bun add anime-sdk
 ```
 
 ## How it works
 
-Every provider exposes the same three methods: `search` → `fetchContentUnits` → `resolveStream`.
+`createSdk()` returns an object with nine methods. Three calls get you a playable URL:
 
 ```ts
-import { HttpClient, GogoanimeProvider, MangadexProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const client = new HttpClient({ timeoutMs: 10_000 });
+const sdk = createSdk(); // zero config — all 12 sources
 
-// Anime example
-const anime = new GogoanimeProvider(client);
-const shows = await anime.search('Frieren');
-const eps = await anime.fetchContentUnits(shows[0].id);
-const stream = await anime.resolveStream(eps[0].id, 'sub');
+// 1. Search
+const results = await sdk.search('Frieren', { kind: 'anime' });
 
-// Manga example
-const manga = new MangadexProvider(client);
-const books = await manga.search('Frieren');
-const chapters = await manga.fetchContentUnits(books[0].id);
-const pages = await manga.resolveStream(chapters[0].id);
+// 2. Episodes
+const { items: episodes } = await sdk.episodes(results[0]);
+
+// 3. Stream
+const stream = await sdk.stream(episodes[0], { language: 'sub' });
+console.log(stream.url); // playable URL
+console.log(stream.origin.host); // CDN hostname
+console.log(stream.adjacent.next); // next episode { id, number }
 ```
 
-## The resolved stream shape
-
-`resolveStream` returns `ResolvedMediaStream`: a discriminated union on `type`:
+Manga works the same way — no language argument:
 
 ```ts
-type ResolvedMediaStream =
-  | { type: 'video'; streams: IVideoPayload[] }
-  | { type: 'manga'; pages: IMangaPayload };
+const manga = await sdk.search('Chainsaw Man', { kind: 'manga' });
+const { items: chapters } = await sdk.chapters(manga[0]);
+const pages = await sdk.pages(chapters[0]);
+console.log(pages.pages[0].url); // image URL for page 1
 ```
 
-Manga providers return `type: 'manga'`, while anime providers return `type: 'video'`. Always check `result.type` before accessing the payload.
+## Value types
 
-Each `IMangaPayload` carries:
-
-```ts
-interface IMangaPayload {
-  imageUrls: string[]; // high-resolution image URLs for each page
-  headers?: Record<string, string>; // Referer required by some sites
-}
-```
-
-Each `IVideoPayload` in the streams array has:
+All return values are plain TypeScript interfaces — `JSON.stringify`-safe, safe for React state, Zustand, Redux, React Query. No classes, no `instanceof` checks.
 
 ```ts
-interface IVideoPayload {
-  sourceUrl: string; // direct URL or HLS manifest
-  isHLS: boolean; // true → feed to an HLS player
-  quality: '1080p' | '720p' | '480p' | '360p' | 'auto';
-  language?: ContentLanguage;
-  headers?: Record<string, string>; // Referer/User-Agent required by some CDNs
-  subtitles?: ISubtitleTrack[]; // external VTT tracks, when the provider has them
+interface Media {
+  id: string; // opaque — pass back to SDK methods
+  kind: 'anime' | 'manga';
+  title: { preferred: string; english?: string; romaji?: string; native?: string };
+  cover?: { url: string; color?: string };
+  score?: { value: number; scale: number }; // { value: 87, scale: 100 } → 8.7
+  year?: number;
+  mappings: { anilist?: number; mal?: number; kitsu?: number };
 }
 
-interface ISubtitleTrack {
+interface Episode {
+  id: string; // opaque
+  mediaId: string;
+  number: number;
+  title?: string;
+  languages: ('sub' | 'dub' | 'raw')[];
+  qualities: ('1080p' | '720p' | '480p' | '360p' | 'auto')[];
+  source: string;
+}
+
+interface Stream {
   url: string;
-  language: string; // BCP-47 (e.g. 'en', 'pt-BR')
-  label: string; // human-readable ("English", "Português")
-  format?: 'vtt' | 'srt' | 'ass';
+  origin: { host: string; url: string; proxied: boolean };
+  isHls: boolean;
+  qualities: { label: string; url: string }[];
+  language: 'sub' | 'dub' | 'raw';
+  subtitles: { url: string; language: string; label: string; format: 'vtt' | 'srt' | 'ass' }[];
+  headers?: Record<string, string>;
+  adjacent: {
+    prev?: { id: string; number: number };
+    next?: { id: string; number: number };
+  };
 }
 ```
 
-## Sub / dub / raw
-
-`fetchContentUnits` returns one unified episode list: each `IContentUnit` advertises its translations via `availableLanguages: ContentLanguage[]`. The translation is picked at `resolveStream` time:
+## Browse
 
 ```ts
-type ContentLanguage = 'sub' | 'dub' | 'raw';
+const trending = await sdk.browse({ list: 'trending', kind: 'anime' });
+// → List<Media> = { items: Media[], nextCursor?: string }
 ```
 
+Lists: `'trending'` | `'popular'` | `'seasonal'` | `'top'`. Seasonal requires `season` + `year`.
+
+## Which source is used?
+
+The SDK picks the best available source automatically, ranked by success rate. You don't choose — but you can inspect:
+
 ```ts
-const eps = await provider.fetchContentUnits(shows[0].id);
-const ep = eps[0]; // ep.availableLanguages tells you what's playable
-const result = await provider.resolveStream(ep.id, 'dub');
+const sources = await sdk.sources(results[0]);
+// → [{ id: 'megaplay', status: 'available', successRate: 0.97 }, ...]
 ```
 
-Providers that don't support the requested language fall back to `'sub'`.
+To target a specific source, pass `sources: ['allmanga']` to `createSdk()`.
 
-## Inspecting tracks without resolving the stream
+## Cancellation
 
-Some providers expose a cheap metadata endpoint so a UI can show the subtitle/quality selector before playback. Implement (or call) `fetchUnitTracks` when available:
+Every method accepts `{ signal?: AbortSignal }`:
 
 ```ts
-if (provider.fetchUnitTracks) {
-  const { subtitles, qualities } = await provider.fetchUnitTracks(ep.id, 'sub');
-  // subtitles: ISubtitleTrack[], qualities: IVideoPayload['quality'][]
+const ac = new AbortController();
+setTimeout(() => ac.abort(), 5000);
+const results = await sdk.search('Frieren', { kind: 'anime', signal: ac.signal });
+```
+
+## Progressive search
+
+`sdk.search()` is both `AsyncIterable<Media>` and `PromiseLike<Media[]>`:
+
+```ts
+// Iterate as results arrive from each source:
+for await (const hit of sdk.search('Frieren', { kind: 'anime' })) {
+  console.log(hit.title.preferred);
+}
+
+// Or await the full array:
+const all = await sdk.search('Frieren', { kind: 'anime' });
+```
+
+## Errors
+
+```ts
+import { AniError, AniErrorCode } from 'anime-sdk';
+
+try {
+  const stream = await sdk.stream(episode);
+} catch (e) {
+  if (e instanceof AniError) {
+    switch (e.code) {
+      case AniErrorCode.NoStream: // no playable URL found
+      case AniErrorCode.SourceUnavailable: // upstream unreachable
+      case AniErrorCode.RateLimited: // rate limit hit
+      case AniErrorCode.Cancelled: // AbortSignal fired
+      case AniErrorCode.NotFound: // title/episode not found
+    }
+  }
 }
 ```
 
-Providers without a cheap path leave the method undefined: read `IVideoPayload.subtitles` straight off the resolved stream instead.
+## HTTP server
 
-## Using the resolved URL
-
-Pass `sourceUrl` directly to any HLS player or downloader. Many CDNs require the `headers` object to be forwarded:
-
-```ts
-// hls.js
-const hls = new Hls();
-hls.loadSource(stream.sourceUrl);
-// hls.js doesn't support custom headers on fetch: serve through your HTTP server instead
-
-// ffmpeg
-// ffmpeg -i "url" -headers "Referer: ..." output.mp4
-
-// React Native / Video
-<Video source={{ uri: stream.sourceUrl, headers: stream.headers }} />
+```sh
+npx anime-sdk            # → http://localhost:3030
+PORT=8080 npx anime-sdk
 ```
 
-## Downloading to disk
+Or in code:
 
-The SDK includes built-in download utilities. HLS anime streams are downloaded by fetching segments and muxing with `ffmpeg`; direct MP4s stream straight to disk. Manga chapters are packaged as `.zip` archives.
+```ts
+import { startServerV2 } from 'anime-sdk/server';
+await startServerV2({ port: 3030 });
+```
+
+See [HTTP Server](/docs/http-server/) for routes and configuration.
+
+## Configuration
+
+```ts
+createSdk({
+  sources?:  string[];   // whitelist source IDs; default: all 12
+  disabled?: string[];   // blacklist a subset
+  http?: { timeoutMs?: number; retries?: number; userAgent?: string };
+  proxy?: { signSecret?: string; allowedHosts?: string[] };
+  cache?: { get(k: string): unknown; set(k: string, v: unknown): void };
+});
+```
+
+All fields optional. `createSdk()` with no args works out of the box.
+
+## Downloading
 
 ```ts
 import { downloadVideo, downloadMangaChapter } from 'anime-sdk';
 
-// Anime: resolveStream → downloadVideo
-const animeResult = await animeProvider.resolveStream(eps[0].id, 'sub');
-if (animeResult.type === 'video') {
-  const { outputPath, fileSize } = await downloadVideo(animeResult.streams, './episode-1.mp4', {
-    onProgress: ({ phase, detail }) => console.log(`[${phase}] ${detail ?? ''}`),
-  });
-  console.log(`Saved ${fileSize} bytes → ${outputPath}`);
-}
+const stream = await sdk.stream(episode, { language: 'sub' });
+await downloadVideo(stream, './episode-1.mp4');
 
-// Manga: resolveStream → downloadMangaChapter
-const mangaResult = await mangaProvider.resolveStream(chapters[0].id);
-if (mangaResult.type === 'manga') {
-  const { pageCount, outputPath } = await downloadMangaChapter(mangaResult.pages, './ch-1.zip', {
-    onProgress: ({ downloaded, total }) => console.log(`${downloaded}/${total}`),
-  });
-  console.log(`Packed ${pageCount} pages → ${outputPath}`);
-}
+const pages = await sdk.pages(chapter);
+await downloadMangaChapter(pages, './chapter-1.zip');
 ```
 
-Pass the full `streams` array to `downloadVideo` and it tries each candidate in order, falling back automatically on failure. See [Downloads](/docs/download/) for the full API including batch downloads and low-level HLS helpers.
-
-## Swapping providers
-
-The three calls are identical across providers. Swap the import and constructor, nothing else changes:
-
-```ts
-import { AllmangaProvider } from 'anime-sdk';
-const provider = new AllmangaProvider(new HttpClient());
-// same: search → fetchContentUnits → resolveStream
-```
-
-## Unified URN IDs
-
-Every ID returned by the SDK is a URN — `${providerId}:${rawId}`:
-
-```
-allmanga:5jzpRTJWnubrgHm5G          → media URN
-allmanga:5jzpRTJWnubrgHm5G/1        → content unit URN
-anilist:1                           → metadata URN (single namespace)
-mal:anime:21  /  kitsu:manga:13     → typed catalogue URN (anime/manga distinction)
-```
-
-The first colon is the separator; raw IDs may themselves contain colons or slashes. The metadata layer's `MappingClient` translates between catalogue and content-provider namespaces automatically, so you can swap content providers without changing your data layer.
-
-## Metadata layer
-
-Use AniList / MAL / Kitsu as a unified catalogue front-end, then pipe to any content provider for actual playback. The mapping (anilist id → site raw id) is resolved through a cache → provider native lookup → MALSync/Anify/arm-server → fuzzy waterfall.
-
-```ts
-import { HttpClient, AnilistMeta, AllmangaProvider } from 'anime-sdk';
-
-const http = new HttpClient();
-const meta = new AnilistMeta(http);
-const allmanga = new AllmangaProvider(http);
-
-const info = await meta.fetchMediaInfo('anilist:1'); // full IMediaMetadata
-const stream = await meta.resolveStream('anilist:1', 1, allmanga, 'sub');
-```
-
-The metadata object includes relations (sequel/prequel), characters with voice actors, staff, recommendations, external links (Crunchyroll, …) and per-episode `streamingEpisodes` with titles + thumbnails (and filler/recap flags when sourced from MAL).
-
-## Cancellation
-
-Every method accepts an optional `CallOptions.signal`:
-
-```ts
-const ac = new AbortController();
-setTimeout(() => ac.abort(), 1500);
-await meta.search('frieren', { signal: ac.signal });
-```
-
-The signal is threaded all the way down to `fetch`, the rate-limiter queue, and the retry loop.
+See [Downloads](/docs/download/) for full API.
 
 ## Next steps
 
-- [Browse providers](/docs/providers/): AllManga, Gogoanime, Anikoto, Goyabu
+- [Sources](/docs/providers/): all 12 sources and what they support
+- [HTTP Server](/docs/http-server/): routes, proxy, auth, caching
+- [Stream Proxy](/docs/proxy/): serve browser-playable URLs
 - [Downloads](/docs/download/): save episodes as MP4 and chapters as ZIP
-- [Run the HTTP server](/docs/http-server/): call anime-sdk from any language
-- [Full API reference](/docs/api-reference/)
-- [Add a provider](/docs/contributing/)
+- [API Reference](/docs/api-reference/)
+- [Contributing](/docs/contributing/)

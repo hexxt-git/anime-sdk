@@ -1,34 +1,34 @@
 ---
-title: MangaDex
-description: How to use the MangadexProvider in anime-sdk.
+title: mangadex
+description: Manga source for mangadex.org — the gold standard for manga chapters and pages.
 ---
 
-The `MangadexProvider` uses the official MangaDex JSON API. It is the gold standard for manga content, providing excellent metadata, cover art, and high-resolution images.
+`MangadexSource` uses the official `api.mangadex.org` JSON API. High-quality images, huge catalogue, reliable.
+
+## Capabilities
+
+- `search`, `chapters`, `pages`
 
 ## Usage
 
 ```ts
-import { HttpClient, MangadexProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const provider = new MangadexProvider(http);
+const sdk = createSdk({ sources: ['mangadex'] });
 
-const results = await provider.search('Frieren');
-const chapters = await provider.fetchContentUnits(results[0].id);
-const pages = await provider.resolveStream(chapters[0].id);
-
-if (pages.type === 'manga') {
-  console.log(pages.pages.imageUrls);
-}
+const results = await sdk.search('Frieren', { kind: 'manga' });
+const { items: chapters } = await sdk.chapters(results[0]);
+const pages = await sdk.pages(chapters[0]);
+// pages.pages[0].url → image URL
+// pages.pages[0].origin.host → 'uploads.mangadex.org'
 ```
 
-## Characteristics
+## Pagination
 
-| Feature       | Details                       |
-| ------------- | ----------------------------- |
-| **Catalog**   | Manga                         |
-| **Languages** | `sub` (English by default)    |
-| **Method**    | JSON API (`api.mangadex.org`) |
-| **Images**    | High-resolution direct URLs   |
+For long manga (Berserk, One Piece, etc.), `chapters()` returns all chapters in one call by paginating through the `/manga/{id}/feed` endpoint (500 per page). Expect this to take a few seconds for 1000+ chapter manga.
 
-MangaDex is highly recommended for its stability and the quality of its API. It supports complex filtering and provides detailed information about series and chapters.
+## Notes
+
+- API at `api.mangadex.org` — no authentication required for public content.
+- Images served from `uploads.mangadex.org`; require `Referer: https://mangadex.org/` header.
+- Page URLs are `{baseUrl}/data/{hash}/{filename}` where `baseUrl` comes from the at-home server endpoint.
