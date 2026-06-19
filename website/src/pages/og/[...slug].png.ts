@@ -57,19 +57,19 @@ export const pages: Record<string, { title: string; description: string; section
   'docs/api-reference': {
     title: 'API Reference',
     description:
-      'Every exported type, interface, and class — IVideoPayload, IContentUnit, BaseProvider, HttpClient, and more.',
+      'Every exported type, interface, and class — Media, Episode, Stream, Pages, AniError, createSdk, startServerV2, and more.',
     section: 'DOCS',
   },
   'docs/contributing': {
     title: 'Contributing',
     description:
-      'Add a new provider in four steps: extend BaseProvider, compose extractors, re-export, and ship a live E2E screenshot test.',
+      'Add a new source in four steps: implement the Source interface, register it in createSdk(), compose extractors, and ship a live E2E screenshot test.',
     section: 'DOCS',
   },
   'docs/providers/index': {
     title: 'Providers',
     description:
-      '9 live-tested providers across anime and manga — sub, dub, raw, and Brazilian Portuguese. All verified on every release.',
+      '12 live-tested sources across anime and manga — sub, dub, raw, and Brazilian Portuguese. All verified on every release.',
     section: 'PROVIDERS',
   },
   'docs/providers/allmanga': {

@@ -1,24 +1,24 @@
 import { useState, useEffect } from 'react';
 
 const CODE_LINES: string[] = [
-  `<span class="kw">import</span> <span class="pun">{</span> <span class="typ">HttpClient</span><span class="pun">,</span> <span class="typ">AllmangaProvider</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>`,
+  `<span class="kw">import</span> <span class="pun">{</span> <span class="typ">createSdk</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>`,
   ``,
-  `<span class="kw">const</span> provider <span class="pun">=</span> <span class="kw">new</span> <span class="fn">AllmangaProvider</span><span class="pun">(</span><span class="kw">new</span> <span class="fn">HttpClient</span><span class="pun">({</span> timeoutMs<span class="pun">:</span> <span class="num">25_000</span> <span class="pun">}));</span>`,
+  `<span class="kw">const</span> sdk <span class="pun">=</span> <span class="fn">createSdk</span><span class="pun">();</span> <span class="cm">// zero config</span>`,
   ``,
   `<span class="cm">// 1. Search for an anime title</span>`,
-  `<span class="kw">const</span> hits <span class="pun">=</span> <span class="kw">await</span> provider<span class="pun">.</span><span class="fn">search</span><span class="pun">(</span><span class="str">'Frieren'</span><span class="pun">);</span>`,
-  `<span class="cm">// → [{ id: 'frieren-beyond', title: "Frieren: Beyond Journey's End" }]</span>`,
+  `<span class="kw">const</span> <span class="pun">[</span>show<span class="pun">]</span> <span class="pun">=</span> <span class="kw">await</span> sdk<span class="pun">.</span><span class="fn">search</span><span class="pun">(</span><span class="str">'Frieren'</span><span class="pun">,</span> <span class="pun">{</span> kind<span class="pun">:</span> <span class="str">'anime'</span> <span class="pun">});</span>`,
+  `<span class="cm">// → { title: { preferred: "Frieren: Beyond Journey's End" } }</span>`,
   ``,
   `<span class="cm">// 2. Fetch episode list</span>`,
-  `<span class="kw">const</span> eps <span class="pun">=</span> <span class="kw">await</span> provider<span class="pun">.</span><span class="fn">fetchContentUnits</span><span class="pun">(</span>hits<span class="pun">[</span><span class="num">0</span><span class="pun">].</span>id<span class="pun">,</span> <span class="str">'sub'</span><span class="pun">);</span>`,
-  `<span class="cm">// → [{ id: 'ep-1', title: 'Episode 1' }, { id: 'ep-2', ... }, ...]</span>`,
+  `<span class="kw">const</span> <span class="pun">{</span> items <span class="pun">}</span> <span class="pun">=</span> <span class="kw">await</span> sdk<span class="pun">.</span><span class="fn">episodes</span><span class="pun">(</span>show<span class="pun">);</span>`,
+  `<span class="cm">// → [{ id: '...', number: 1, languages: ['sub', 'dub'] }, ...]</span>`,
   ``,
   `<span class="cm">// 3. Resolve a direct stream URL</span>`,
-  `<span class="kw">const</span> stream <span class="pun">=</span> <span class="kw">await</span> provider<span class="pun">.</span><span class="fn">resolveStream</span><span class="pun">(</span>eps<span class="pun">[</span><span class="num">0</span><span class="pun">].</span>id<span class="pun">);</span>`,
-  `<span class="cm">// → { streams: [{ sourceUrl: 'https://...', quality: '1080p' }] }</span>`,
+  `<span class="kw">const</span> stream <span class="pun">=</span> <span class="kw">await</span> sdk<span class="pun">.</span><span class="fn">stream</span><span class="pun">(</span>items<span class="pun">[</span><span class="num">0</span><span class="pun">],</span> <span class="pun">{</span> language<span class="pun">:</span> <span class="str">'sub'</span> <span class="pun">});</span>`,
+  `<span class="cm">// → { url, origin, isHls, qualities, adjacent }</span>`,
   ``,
-  `console<span class="pun">.</span><span class="fn">log</span><span class="pun">(</span>stream<span class="pun">.</span>streams<span class="pun">[</span><span class="num">0</span><span class="pun">].</span>sourceUrl<span class="pun">);</span>`,
-  `<span class="cm">// "https://v2.vidsrc.me/stream/frieren-ep1-720p.m3u8"</span>`,
+  `console<span class="pun">.</span><span class="fn">log</span><span class="pun">(</span>stream<span class="pun">.</span>url<span class="pun">);</span>`,
+  `<span class="cm">// "https://cdn.example.com/frieren-ep1.m3u8"</span>`,
 ];
 
 const CODE_LINES_PLAIN = CODE_LINES.map((l) => l.replace(/<[^>]+>/g, ''));

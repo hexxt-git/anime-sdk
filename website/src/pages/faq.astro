@@ -13,16 +13,16 @@ const faqs = [
     a: 'No. anime-sdk runs in Node or Bun only. For a browser frontend, run the built-in HTTP server on your backend and call it over HTTP from the client. Set proxy: true when starting the server — it rewrites stream URLs so your frontend never has to deal with CDN headers or CORS.',
   },
   {
-    q: 'I got a sourceUrl back from resolveStream. How do I play it?',
-    a: "Check isHLS. If true, the URL is an HLS stream — use hls.js on Chrome or Firefox, or a native &lt;video&gt; on Safari. If false, it's a plain MP4 you can set directly as the video source. If you're running the HTTP server with proxy: true, all of this is handled for you and the URL just works.",
+    q: 'I got a stream back from sdk.stream(). How do I play it?',
+    a: "Check stream.isHls. If true, use hls.js on Chrome or Firefox, or a native &lt;video&gt; on Safari. If false, set stream.url directly as the video source. stream.origin.host tells you where it really came from. If you're running the HTTP server, all URLs are already proxied and work directly in the browser.",
   },
   {
-    q: 'Which provider should I use?',
-    a: 'For general anime, start with AllManga — widest catalogue, sub and dub, stable API. AnimeParadise is the best pick when you need external subtitle tracks. Gogoanime is a solid fallback for titles AllManga is missing. Goyabu is the only option for Brazilian Portuguese. For manga, MangaDex first, then WeebCentral or Mangapill.',
+    q: 'Which source gives the best results?',
+    a: "createSdk() picks the best available source automatically. If you want to target a specific one, pass sources: ['allmanga'] in the config. AllManga has the widest anime catalogue with sub and dub. AnimeParadise is best for external subtitle tracks. MangaDex is the canonical manga source.",
   },
   {
-    q: 'Which providers have dubbed anime?',
-    a: "AllManga, Anikoto, and MegaPlay support sub and dub. Goyabu is Brazilian Portuguese dub only. Gogoanime and AnimeParadise are sub-only. Pass the language when calling resolveStream — if a provider doesn't support what you asked for, it falls back to sub.",
+    q: 'Which sources have dubbed anime?',
+    a: "AllManga, Anikoto, and MegaPlay support sub and dub. Goyabu is Brazilian Portuguese dub only. Gogoanime and AnimeParadise are sub-only. Pass language: 'dub' to sdk.stream() — if the source doesn't have dub for that episode, you'll get an error.",
   },
   {
     q: 'Do stream URLs expire?',
@@ -37,8 +37,8 @@ const faqs = [
     a: 'anime-sdk resolves stream URLs from sites that host content publicly. It does not bypass DRM or crack paywalls. Whether your specific use is legal depends on your jurisdiction and what you are building — a personal tool is a different situation from a public redistribution service.',
   },
   {
-    q: 'What happens when a provider goes down?',
-    a: 'Swap it out. All providers share the same three-method interface, so switching is a one-line import change. The live E2E tests hit real endpoints and fail the moment an upstream site breaks, which is how we catch when a provider needs updating.',
+    q: 'What happens when a source goes down?',
+    a: "The SDK tries the next best available source automatically. If you need to disable a specific source, pass disabled: ['source-id'] to createSdk(). The live E2E tests hit real endpoints and fail the moment an upstream site breaks, which is how we catch when a source needs updating.",
   },
   {
     q: 'Can I download episodes and chapters to disk?',

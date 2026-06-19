@@ -1,29 +1,29 @@
 ---
-const megaplayCode = `<code><span class="kw">import</span> <span class="pun">{</span> <span class="typ">HttpClient</span><span class="pun">,</span> <span class="typ">MegaPlayProvider</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
+const demoCode = `<code><span class="kw">import</span> <span class="pun">{</span> <span class="typ">createSdk</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
 
-<span class="kw">const</span> provider <span class="pun">=</span> <span class="kw">new</span> <span class="fn">MegaPlayProvider</span><span class="pun">(</span>
-  <span class="kw">new</span> <span class="fn">HttpClient</span><span class="pun">({</span> timeoutMs<span class="pun">:</span> <span class="num">10_000</span> <span class="pun">})</span>
-<span class="pun">);</span>
+<span class="kw">const</span> sdk <span class="pun">=</span> <span class="fn">createSdk</span><span class="pun">();</span> <span class="cm">// zero config</span>
 
-<span class="kw">const</span> shows   <span class="pun">=</span> <span class="kw">await</span> provider<span class="pun">.</span><span class="fn">search</span><span class="pun">(</span><span class="str">'Frieren'</span><span class="pun">);</span>
-<span class="kw">const</span> units   <span class="pun">=</span> <span class="kw">await</span> provider<span class="pun">.</span><span class="fn">fetchContentUnits</span><span class="pun">(</span>shows<span class="pun">[</span><span class="num">0</span><span class="pun">].</span>id<span class="pun">);</span>
-<span class="kw">const</span> result  <span class="pun">=</span> <span class="kw">await</span> provider<span class="pun">.</span><span class="fn">resolveStream</span><span class="pun">(</span>units<span class="pun">[</span><span class="num">0</span><span class="pun">].</span>id<span class="pun">);</span>
+<span class="cm">// search → episodes → stream</span>
+<span class="kw">const</span> <span class="pun">[</span>show<span class="pun">]</span>    <span class="pun">=</span> <span class="kw">await</span> sdk<span class="pun">.</span><span class="fn">search</span><span class="pun">(</span><span class="str">'Frieren'</span><span class="pun">,</span> <span class="pun">{</span> kind<span class="pun">:</span> <span class="str">'anime'</span> <span class="pun">});</span>
+<span class="kw">const</span> <span class="pun">{</span> items <span class="pun">}</span> <span class="pun">=</span> <span class="kw">await</span> sdk<span class="pun">.</span><span class="fn">episodes</span><span class="pun">(</span>show<span class="pun">);</span>
+<span class="kw">const</span> stream   <span class="pun">=</span> <span class="kw">await</span> sdk<span class="pun">.</span><span class="fn">stream</span><span class="pun">(</span>items<span class="pun">[</span><span class="num">0</span><span class="pun">],</span> <span class="pun">{</span> language<span class="pun">:</span> <span class="str">'sub'</span> <span class="pun">});</span>
 
-<span class="kw">if</span> <span class="pun">(</span>result<span class="pun">.</span>type <span class="pun">===</span> <span class="str">'video'</span><span class="pun">)</span> console<span class="pun">.</span><span class="fn">log</span><span class="pun">(</span>result<span class="pun">.</span>streams<span class="pun">[</span><span class="num">0</span><span class="pun">].</span>sourceUrl<span class="pun">);</span>
-<span class="kw">if</span> <span class="pun">(</span>result<span class="pun">.</span>type <span class="pun">===</span> <span class="str">'manga'</span><span class="pun">)</span> console<span class="pun">.</span><span class="fn">log</span><span class="pun">(</span>result<span class="pun">.</span>pages<span class="pun">.</span>imageUrls<span class="pun">);</span></code>`;
+console<span class="pun">.</span><span class="fn">log</span><span class="pun">(</span>stream<span class="pun">.</span>url<span class="pun">);</span>          <span class="cm">// playable URL</span>
+console<span class="pun">.</span><span class="fn">log</span><span class="pun">(</span>stream<span class="pun">.</span>origin<span class="pun">.</span>host<span class="pun">);</span>  <span class="cm">// origin hostname</span>
+console<span class="pun">.</span><span class="fn">log</span><span class="pun">(</span>stream<span class="pun">.</span>adjacent<span class="pun">.</span>next<span class="pun">);</span> <span class="cm">// next episode id</span></code>`;
 ---
 
 <section id="demo">
   <div class="hline px-10 py-8">
     <h2 class="mb-1 text-[28px] font-bold tracking-tight">Setup in minutes.</h2>
     <p class="text-[14px]" style="color: var(--muted);">
-      Every provider exposes{' '}
+      One import. Three calls.{' '}
       <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]">search</code>
       {' → '}
-      <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]">fetchContentUnits</code>
+      <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]">episodes</code>
       {' → '}
-      <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]">resolveStream</code>
-      . Swap the provider, the three calls don't change.
+      <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]">stream</code>
+      . All 12 sources behind a single API.
     </p>
   </div>
 
@@ -36,18 +36,18 @@ const megaplayCode = `<code><span class="kw">import</span> <span class="pun">{</
       <pre
         class="font-mono text-[12px] leading-[1.85] text-zinc-300"><code><span class="cm">$</span> npm install anime-sdk</code></pre>
       <div class="mt-7 mb-5 flex items-center gap-3">
-        <span class="badge badge-ok">Provider · megaplay</span>
+        <span class="badge badge-ok">2.0 · createSdk</span>
         <span class="font-mono text-[11px]" style="color: var(--muted);">example.ts</span>
       </div>
-      <pre class="font-mono text-[12px] leading-[1.85] text-zinc-300" set:html={megaplayCode} />
+      <pre class="font-mono text-[12px] leading-[1.85] text-zinc-300" set:html={demoCode} />
       <p class="mt-5 text-[12px]" style="color: var(--muted);">
-        Want sub/dub? Pass{' '}
+        Pass{' '}
         <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]"
           >'sub' | 'dub' | 'raw'</code
         >
         {' '}to{' '}
-        <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]">resolveStream</code>
-        . Need a different source? Swap the provider; same three calls.
+        <code class="bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11.5px]">stream()</code>
+        . All types are plain POJOs — safe for React state, Redux, Zustand.
       </p>
     </div>
     <div

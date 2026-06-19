@@ -115,7 +115,7 @@ export default function ProviderDashboardScene() {
             display: 'inline-block',
           }}
         />
-        <span style={{ color: '#e5e7eb', fontSize: 13.5, fontWeight: 600 }}>AllmangaProvider</span>
+        <span style={{ color: '#e5e7eb', fontSize: 13.5, fontWeight: 600 }}>allmanga</span>
         <span
           style={{
             background: 'rgba(139,92,246,0.12)',
@@ -248,8 +248,8 @@ export default function ProviderDashboardScene() {
           fontSize: 11.5,
         }}
       >
-        <span style={{ color: '#4b5563' }}>resolveStream → </span>
-        <span style={{ color: '#86efac' }}>https://v2.vidsrc.me/stream/frieren-ep1.m3u8</span>
+        <span style={{ color: '#4b5563' }}>stream.url → </span>
+        <span style={{ color: '#86efac' }}>https://cdn.example.com/frieren-ep1.m3u8</span>
       </div>
     </div>
   );
