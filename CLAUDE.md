@@ -22,8 +22,7 @@ The SDK has five layers:
 - `http.ts`: `HttpClient` wraps `fetch` with per-host rate limiting, exponential-backoff retry (honours `Retry-After`), curl fallback transport, and end-to-end `AbortSignal` composition.
 - `dom.ts`: `DomRegistry` + `BrowserDomParser`. Auto-registers `linkedom` (a direct dependency) on first parse — no consumer shim needed.
 - `hls.ts`: `HlsUtils.rewriteManifest` rewrites `.m3u8` URIs to route through a proxy.
-- `id.ts`: `encodeId`/`decodeId` — base64url-JSON opaque IDs. All `Media`/`Episode`/`Chapter` ids are encoded here. Also exports legacy URN helpers (`buildUrn` etc.) for backward compat.
-- `mapping.ts`: `MappingClient` — cross-source ID resolver. Four-step waterfall: cache → `source.lookupByMapping` → MALSync/Anify (raced) → fuzzy title match. Not exported.
+- `id.ts`: `encodeId`/`decodeId` — base64url-JSON opaque IDs. All `Media`/`Episode`/`Chapter` ids are encoded here.
 
 **2. Types and errors (`src/types.ts`, `src/errors.ts`, `src/config.ts`)**: all public value types.
 
@@ -33,7 +32,7 @@ The SDK has five layers:
 
 **3. Sources (`src/sources/`)**: internal, not exported from `src/index.ts`.
 
-Single `Source` interface (`src/sources/base.ts`) replaces the old `BaseProvider` + `BaseMetadataProvider` split. Capability flags: `search`, `info`, `episodes`, `chapters`, `stream`, `pages`, `browse`, `mapping`.
+Single `Source` interface (`src/sources/base.ts`). Capability flags: `search`, `info`, `episodes`, `chapters`, `stream`, `pages`, `browse`, `mapping`.
 
 - Catalogue sources: `anilist.ts`, `mal.ts`, `kitsu.ts` — implement `search`, `info`, `browse`.
 - Anime playback: `allmanga.ts`, `megaplay.ts`, `animeparadise.ts`, `anikoto.ts`, `gogoanime.ts`, `goyabu.ts` — implement `episodes`, `stream`.
@@ -51,10 +50,9 @@ All sources use `encodeId`/`decodeId` for IDs. `stream(episodeId)` and `pages(ch
 
 **5. Server (`src/server/`)**: thin consumer of the SDK.
 
-- `routes.ts`: 9 routes that decode params → call SDK → JSON-serialize.
-- `startServerV2({ port, sdk })`: new single-call server. `sdk` defaults to `createSdk()`.
+- `routes.ts`: routes that decode params → call SDK → JSON-serialize.
+- `startServer({ port, sdk })`: single-call server. `sdk` defaults to `createSdk()`.
 - `cli.ts`: process entry for `npx anime-sdk`. Reads `PORT`, `SOURCES_DISABLED` env vars.
-- Legacy `startServer({ providers, metaProviders, ... })`: old 1.x API, kept for backward compat.
 
 ### ID space
 
@@ -66,8 +64,6 @@ Every `id` field on `Media`, `Episode`, `Chapter` is a base64url-encoded JSON to
 
 Consumers treat ids as opaque strings. The SDK decodes them internally to dispatch calls to the right source.
 
-Legacy URN helpers (`buildUrn`, `parseUrn`, `unwrapUrn`, `strictUnwrapUrn`, `buildTypedUrn`, `parseTypedUrn`) are in `src/internal/id.ts` and exported from `src/index.ts` for backward compat.
-
 ### Extractors (`src/extractors/`)
 
 Stateless, take an embed URL + `HttpClient`, return `IVideoPayload[]`. Used internally by sources. `BloggerExtractor`, `Mp4UploadExtractor`, `GenericHlsExtractor`, `VidstreamingExtractor`.
@@ -78,8 +74,8 @@ Stateless, take an embed URL + `HttpClient`, return `IVideoPayload[]`. Used inte
 
 ## Tests
 
-- **Unit tests** (`tests/*.test.ts`): cover pure-logic modules — `HttpClient`, `HlsUtils`, `DomRegistry`, extractor parsing, language inference, URN helpers + new `encodeId`/`decodeId`, similarity matcher, rate limiter, retry policy, `ProgressiveResult`, `Registry`, `Sdk` smoke test, types/errors/config.
-- **E2E tests** (`tests/e2e/*.test.ts`): live, non-mocked. Each searches a popular title, picks an episode/chapter, resolves the stream/pages, and (for anime) runs `captureStreamScreenshot` to screenshot a real video frame. Assertion: the PNG is >1KB. The new source tests use `*Source` classes; a `streamToPayload()` helper converts `Stream` to `IVideoPayload` for the screenshot helper.
+- **Unit tests** (`tests/*.test.ts`): cover pure-logic modules — `HttpClient`, `HlsUtils`, `DomRegistry`, extractor parsing, `encodeId`/`decodeId`, rate limiter, retry policy, `ProgressiveResult`, `Registry`, `Sdk` smoke test, types/errors/config.
+- **E2E tests** (`tests/e2e/*.test.ts`): live, non-mocked. Each searches a popular title, picks an episode/chapter, resolves the stream/pages, and (for anime) runs `captureStreamScreenshot` to screenshot a real video frame. Assertion: the PNG is >1KB. A `streamToPayload()` helper converts `Stream` to `IVideoPayload` for the screenshot helper.
 
 ### Testing rules (do not negotiate)
 
@@ -87,7 +83,7 @@ Stateless, take an embed URL + `HttpClient`, return `IVideoPayload[]`. Used inte
 - **Never use fake/fixture data in place of a live call.**
 - **Never "gracefully skip" a test.** `if (!reachable) return;`, `it.skipIf(...)` etc. are forbidden.
 - **Tests must be real and pass.** Those are the only two states a test is allowed to be in.
-- **Stubs that replace `BaseProvider` are allowed only for testing pure SDK logic** (e.g. the registry's source-ranking) where the content provider's network behavior is genuinely orthogonal.
+- **Stubs that replace `Source` are allowed only for testing pure SDK logic** (e.g. the registry's source-ranking) where the source's network behavior is genuinely orthogonal.
 
 ## Source/extractor additions
 

@@ -1,6 +1,6 @@
 ---
 title: API Reference
-description: Complete type and function documentation for anime-sdk 2.0.
+description: Complete type and function documentation for anime-sdk.
 ---
 
 ## `createSdk(opts?)`
@@ -23,15 +23,6 @@ interface SdkOptions {
     retries?: number; // default: 3
     userAgent?: string;
   };
-  proxy?: {
-    signSecret?: string; // HMAC-sign proxy URLs
-    allowedHosts?: string[]; // SSRF suffix-matched allowlist
-  };
-  cache?: {
-    get(k: string): unknown;
-    set(k: string, v: unknown): void;
-  };
-  ratelimit?: Record<string, number>; // hostname → req/sec override
 }
 ```
 
@@ -239,7 +230,7 @@ interface Stream {
 }
 ```
 
-`origin.host` is the CDN hostname (never parse `url` to get it). `proxied: true` when the URL goes through the SDK's proxy endpoint.
+`origin.host` is the CDN hostname (never parse `url` to get it).
 
 ### `Pages`
 
@@ -326,77 +317,15 @@ const AniErrorCode = {
 
 ## Server
 
-### `startServerV2(opts?)`
+### `startServer(opts?)`
 
 ```ts
-import { startServerV2 } from 'anime-sdk/server';
+import { startServer } from 'anime-sdk';
 
-function startServerV2(opts?: {
+function startServer(opts?: {
   port?: number; // default: 0 (random); set PORT env var for 3030
   sdk?: Sdk; // default: createSdk()
 }): http.Server;
 ```
 
 Returns an `http.Server`. `server.close()` to shut down. See [HTTP Server](/docs/http-server/) for all routes.
-
----
-
-## Download utilities
-
-### `downloadVideo(stream, outputPath, opts?)`
-
-```ts
-import { downloadVideo } from 'anime-sdk';
-
-function downloadVideo(
-  stream: Stream,
-  outputPath: string,
-  opts?: {
-    onProgress?: (info: { phase: string; detail?: string }) => void;
-    timeoutMs?: number; // default: 300_000 (5 min)
-  },
-): Promise<{ outputPath: string; fileSize: number }>;
-```
-
-HLS: downloads segments, muxes with `ffmpeg`. MP4: streams directly to disk.
-
-### `downloadMangaChapter(pages, outputPath, opts?)`
-
-```ts
-import { downloadMangaChapter } from 'anime-sdk';
-
-function downloadMangaChapter(
-  pages: Pages,
-  outputPath: string,
-  opts?: {
-    onProgress?: (info: { downloaded: number; total: number }) => void;
-    timeoutMs?: number; // per page; default: 30_000
-  },
-): Promise<{ outputPath: string; pageCount: number; fileSize: number }>;
-```
-
-Packages all pages as an uncompressed `.zip` archive.
-
-### `downloadMangaPage(pages, pageIndex, outputDir, opts?)`
-
-```ts
-import { downloadMangaPage } from 'anime-sdk';
-
-function downloadMangaPage(
-  pages: Pages,
-  pageIndex: number,
-  outputDir: string,
-  opts?: { timeoutMs?: number },
-): Promise<{ outputPath: string; fileSize: number; contentType: string }>;
-```
-
----
-
-## Internal utilities (not exported from main entry)
-
-These are still exported for custom integrations but are not part of the primary API:
-
-- `HlsUtils.rewriteManifest(manifestText, playlistUrl, httpClient)` — rewrites `.m3u8` URIs through a proxy
-- `DomRegistry.parse(html)` — singleton HTML parser backed by `linkedom`
-- `normalizeSubtitleEntries(entries)` — normalize arbitrary subtitle shapes to `ISubtitleTrack[]`
-- `proxifySubtitleUrl(proxyBase, track, opts?)` — wrap a subtitle URL through `/proxy`

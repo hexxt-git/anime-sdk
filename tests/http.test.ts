@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HttpClient } from '../src/transport/http.js';
+import { HttpClient } from '../src/internal/http.js';
 
 describe('HttpClient', () => {
   it('should return original URL when no proxy is configured', () => {

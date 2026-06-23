@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { RateLimiter } from '../src/transport/rateLimiter.js';
+import { RateLimiter } from '../src/internal/rateLimiter.js';
 
 describe('RateLimiter', () => {
   it('acquires immediately when under capacity', async () => {

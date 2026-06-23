@@ -5,3 +5,4 @@ references/
 .DS_Store
 *.log
 scratch
+examples/website/tsconfig.tsbuildinfo

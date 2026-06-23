@@ -4,7 +4,7 @@ import { aesDecryptCtr } from '../utils/crypto.js';
 import { Mp4UploadExtractor } from '../extractors/Mp4UploadExtractor.js';
 import { GenericHlsExtractor } from '../extractors/GenericHlsExtractor.js';
 import type { Media, Episode, Stream, List, Subtitle } from '../types.js';
-import type { IVideoPayload, IMediaMappings } from '../types/index.js';
+import type { IVideoPayload } from '../types/index.js';
 import type { Source, SourceCallOpts } from './base.js';
 
 const ALLANIME_KEY_PHRASE = 'Xot36i3lK3:v1';

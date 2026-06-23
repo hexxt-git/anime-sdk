@@ -1,4 +1,3 @@
-import * as crypto from 'node:crypto';
 import { ISubtitleTrack } from '../types/index.js';
 
 /**
@@ -73,51 +72,4 @@ function inferFormatFromUrl(url: string): ISubtitleTrack['format'] | undefined {
   if (path.endsWith('.srt')) return 'srt';
   if (path.endsWith('.ass') || path.endsWith('.ssa')) return 'ass';
   return undefined;
-}
-
-export interface ProxifySubtitleOptions {
-  /** Optional headers the proxy should attach when fetching upstream. */
-  headers?: Record<string, string>;
-  /** Override Content-Type on the proxy response (defaults to `text/vtt` for VTT). */
-  contentType?: string;
-  /**
-   * When set, append an HMAC-SHA256 `sig` parameter computed over `url`
-   * (and `h=` payload, when present) keyed by this secret. Matches the
-   * scheme used by the server's `/proxy` endpoint when `proxySignSecret`
-   * is configured.
-   */
-  signSecret?: string;
-}
-
-/**
- * Wrap a subtitle URL to flow through the SDK's `/proxy` endpoint.
- *
- * This is the same encoding `startServer({ proxy: true })` uses internally;
- * exported so consumers that run their own HTTP layer (or call `resolveStream`
- * directly in Node) can rewrite subtitle URLs the same way.
- */
-export function proxifySubtitleUrl(
-  proxyBase: string,
-  track: ISubtitleTrack,
-  options: ProxifySubtitleOptions = {},
-): string {
-  const ct =
-    options.contentType ??
-    (track.format === 'vtt' || (!track.format && /\.vtt(?:\?|$)/i.test(track.url))
-      ? 'text/vtt'
-      : undefined);
-  const hParam =
-    options.headers && Object.keys(options.headers).length > 0
-      ? Buffer.from(JSON.stringify(options.headers)).toString('base64')
-      : undefined;
-  const parts = [`url=${encodeURIComponent(track.url)}`];
-  if (ct) parts.push(`ct=${encodeURIComponent(ct)}`);
-  if (hParam) parts.push(`h=${encodeURIComponent(hParam)}`);
-  if (options.signSecret) {
-    const h = crypto.createHmac('sha256', options.signSecret);
-    h.update(track.url);
-    if (hParam) h.update('|h=' + hParam);
-    parts.push(`sig=${h.digest('hex')}`);
-  }
-  return `${proxyBase}?${parts.join('&')}`;
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { withRetry, HttpRetryableError, parseRetryAfter } from '../src/transport/retry.js';
+import { withRetry, HttpRetryableError, parseRetryAfter } from '../src/internal/retry.js';
 
 describe('parseRetryAfter', () => {
   it('parses seconds', () => {

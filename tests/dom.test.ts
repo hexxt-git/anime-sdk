@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DomRegistry, BrowserDomParser } from '../src/transport/dom.js';
+import { DomRegistry, BrowserDomParser } from '../src/internal/dom.js';
 import { IDomParser, IDomElement } from '../src/types/index.js';
 
 class MockElement implements IDomElement {

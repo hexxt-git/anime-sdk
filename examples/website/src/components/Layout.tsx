@@ -7,8 +7,6 @@ interface Crumb {
 }
 
 function buildCrumbs(pathname: string, sp: URLSearchParams): Crumb[] {
-  const metaProvider = sp.get('meta');
-  const metaId = sp.get('id');
   const provider = sp.get('provider');
   const title = sp.get('title');
   const ep = sp.get('ep');
@@ -22,57 +20,26 @@ function buildCrumbs(pathname: string, sp: URLSearchParams): Crumb[] {
   }
 
   if (pathname === '/media') {
-    if (metaProvider) crumbs.push({ label: metaProvider, href: `/?meta=${metaProvider}` });
     if (title) crumbs.push({ label: title });
     return crumbs;
   }
 
   if (pathname === '/episodes') {
-    if (metaProvider && metaId) {
-      crumbs.push({ label: metaProvider, href: `/?meta=${metaProvider}` });
-      if (title) {
-        crumbs.push({
-          label: title,
-          href: `/media?meta=${metaProvider}&id=${encodeURIComponent(metaId)}`,
-        });
-      }
-      if (provider) crumbs.push({ label: provider });
-    } else {
-      if (provider) crumbs.push({ label: provider, href: `/?provider=${provider}` });
-      if (title) crumbs.push({ label: title });
-    }
+    if (provider) crumbs.push({ label: provider, href: `/?provider=${provider}` });
+    if (title) crumbs.push({ label: title });
     return crumbs;
   }
 
   if (pathname === '/stream') {
-    const metaIdParam = sp.get('metaId');
-    if (metaProvider && metaIdParam) {
-      crumbs.push({ label: metaProvider, href: `/?meta=${metaProvider}` });
-      if (title) {
-        crumbs.push({
-          label: title,
-          href: `/media?meta=${metaProvider}&id=${encodeURIComponent(metaIdParam)}`,
-        });
-      }
-      const mid = sp.get('mid');
-      if (provider && metaIdParam && title) {
-        crumbs.push({
-          label: provider,
-          href: `/episodes?meta=${metaProvider}&id=${encodeURIComponent(metaIdParam)}&provider=${provider}&title=${encodeURIComponent(title)}&type=${type ?? 'ANIME'}`,
-        });
-      }
-    } else {
-      if (provider) {
-        const epHref = `/episodes?provider=${provider}&mid=${encodeURIComponent(sp.get('mid') ?? '')}&title=${encodeURIComponent(title ?? '')}&type=${type ?? 'ANIME'}`;
-        crumbs.push({ label: provider, href: `/?provider=${provider}` });
-        if (title) crumbs.push({ label: title, href: epHref });
-      }
+    if (provider) {
+      const epHref = `/episodes?provider=${provider}&mid=${encodeURIComponent(sp.get('mid') ?? '')}&title=${encodeURIComponent(title ?? '')}&type=${type ?? 'ANIME'}`;
+      crumbs.push({ label: provider, href: `/?provider=${provider}` });
+      if (title) crumbs.push({ label: title, href: epHref });
     }
     if (ep) crumbs.push({ label: ep });
     return crumbs;
   }
 
-  if (metaProvider) crumbs.push({ label: metaProvider });
   if (provider) crumbs.push({ label: provider });
 
   return crumbs;

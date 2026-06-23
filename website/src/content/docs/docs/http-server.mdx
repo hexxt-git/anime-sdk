@@ -14,24 +14,19 @@ SOURCES_DISABLED=goyabu npx anime-sdk
 Or programmatically:
 
 ```ts
-import { startServerV2 } from 'anime-sdk/server';
-import { createSdk } from 'anime-sdk';
+import { startServer, createSdk } from 'anime-sdk';
 
 // Zero config — SDK auto-constructed
-await startServerV2({ port: 3030 });
+startServer({ port: 3030 });
 
 // With a custom SDK instance:
-const store = new Map();
-await startServerV2({
+startServer({
   port: 3030,
-  sdk: createSdk({
-    cache: { get: (k) => store.get(k), set: (k, v) => store.set(k, v) },
-    proxy: { signSecret: process.env.PROXY_SECRET },
-  }),
+  sdk: createSdk({ sources: ['anilist', 'megaplay'] }),
 });
 ```
 
-`startServerV2` returns an `http.Server` — call `server.close()` to shut it down.
+`startServer` returns an `http.Server` — call `server.close()` to shut it down.
 
 ## Routes
 
@@ -246,28 +241,6 @@ val response = client.newCall(request).execute()
 ```
 
 Note: in Android emulators, `localhost` on the host machine is `10.0.2.2`.
-
-## Proxy
-
-When `proxy` is configured in `createSdk()`, all stream URLs in `/episode/:id/stream` and page URLs in `/chapter/:id/pages` responses are rewritten to go through `/proxy`. See [Stream Proxy](/docs/proxy/).
-
-## Caching
-
-Pass a cache to `createSdk()`:
-
-```ts
-const store = new Map();
-startServerV2({
-  sdk: createSdk({
-    cache: {
-      get: (key) => store.get(key),
-      set: (key, value) => store.set(key, value),
-    },
-  }),
-});
-```
-
-Search results and episode lists are safe to cache indefinitely. Stream URLs carry signed expiries — use a short TTL or skip caching them.
 
 ## Error responses
 

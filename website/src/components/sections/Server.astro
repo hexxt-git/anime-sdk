@@ -1,10 +1,10 @@
 ---
-const serverStartCode = `<code><span class="cm"># zero-install server — all 12 sources, proxy on</span>
+const serverStartCode = `<code><span class="cm"># zero-install server — all 12 sources</span>
 <span class="cm">$</span> npx anime-sdk
 
 <span class="cm">// or programmatically:</span>
-<span class="kw">import</span> <span class="pun">{</span> <span class="typ">startServerV2</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk/server'</span><span class="pun">;</span>
-<span class="kw">await</span> <span class="fn">startServerV2</span><span class="pun">({</span> port<span class="pun">:</span> <span class="num">3030</span> <span class="pun">});</span>
+<span class="kw">import</span> <span class="pun">{</span> <span class="typ">startServer</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
+<span class="fn">startServer</span><span class="pun">({</span> port<span class="pun">:</span> <span class="num">3030</span> <span class="pun">});</span>
 
 <span class="cm">// → http://localhost:3030</span></code>`;
 
@@ -21,9 +21,9 @@ const serverAuthCode = `<code><span class="cm">$</span> PORT<span class="pun">=<
   SOURCES_DISABLED<span class="pun">=</span>goyabu \\
   npx anime-sdk
 
-<span class="cm">// all sources, with SDK instance:</span>
-<span class="kw">import</span> <span class="pun">{</span> <span class="typ">createSdk</span><span class="pun">,</span> <span class="typ">startServerV2</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
-<span class="fn">startServerV2</span><span class="pun">({</span> sdk<span class="pun">:</span> <span class="fn">createSdk</span><span class="pun">({</span> cache <span class="pun">})});</span></code>`;
+<span class="cm">// or with a custom SDK instance:</span>
+<span class="kw">import</span> <span class="pun">{</span> <span class="typ">createSdk</span><span class="pun">,</span> <span class="typ">startServer</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
+<span class="fn">startServer</span><span class="pun">({</span> sdk<span class="pun">:</span> <span class="fn">createSdk</span><span class="pun">({</span> sources<span class="pun">:</span> <span class="pun">[</span><span class="str">'anilist'</span><span class="pun">]</span> <span class="pun">})});</span></code>`;
 ---
 
 <section id="server">
@@ -34,8 +34,7 @@ const serverAuthCode = `<code><span class="cm">$</span> PORT<span class="pun">=<
       </div>
       <p class="text-[14px]" style="color: var(--muted);">
         anime-sdk ships with a zero-config HTTP server. One command or one line of code. Routes for
-        search, episodes, streams, manga pages, and browse; bring-your-own cache with a two-method
-        get/set interface. Point any client at it, ship.
+        search, episodes, streams, manga pages, and browse. Point any client at it, ship.
       </p>
     </div>
   </div>

@@ -8,7 +8,6 @@ anime-sdk is a TypeScript SDK that searches anime and manga across 12 sources an
 ## Requirements
 
 - **Node 20+** or **Bun**: native `fetch` and `crypto.subtle` required
-- **ffmpeg**: only needed for the live E2E test suite
 
 ## Install
 
@@ -23,7 +22,7 @@ npm install anime-sdk
 ```ts
 import { createSdk } from 'anime-sdk';
 
-const sdk = createSdk(); // zero config — all 12 sources
+const sdk = createSdk(); // zero config
 
 // 1. Search
 const results = await sdk.search('Frieren', { kind: 'anime' });
@@ -161,8 +160,8 @@ PORT=8080 npx anime-sdk
 Or in code:
 
 ```ts
-import { startServerV2 } from 'anime-sdk/server';
-await startServerV2({ port: 3030 });
+import { startServer } from 'anime-sdk';
+startServer({ port: 3030 });
 ```
 
 See [HTTP Server](/docs/http-server/) for routes and configuration.
@@ -174,32 +173,14 @@ createSdk({
   sources?:  string[];   // whitelist source IDs; default: all 12
   disabled?: string[];   // blacklist a subset
   http?: { timeoutMs?: number; retries?: number; userAgent?: string };
-  proxy?: { signSecret?: string; allowedHosts?: string[] };
-  cache?: { get(k: string): unknown; set(k: string, v: unknown): void };
 });
 ```
 
 All fields optional. `createSdk()` with no args works out of the box.
 
-## Downloading
-
-```ts
-import { downloadVideo, downloadMangaChapter } from 'anime-sdk';
-
-const stream = await sdk.stream(episode, { language: 'sub' });
-await downloadVideo(stream, './episode-1.mp4');
-
-const pages = await sdk.pages(chapter);
-await downloadMangaChapter(pages, './chapter-1.zip');
-```
-
-See [Downloads](/docs/download/) for full API.
-
 ## Next steps
 
 - [Sources](/docs/providers/): all 12 sources and what they support
-- [HTTP Server](/docs/http-server/): routes, proxy, auth, caching
-- [Stream Proxy](/docs/proxy/): serve browser-playable URLs
-- [Downloads](/docs/download/): save episodes as MP4 and chapters as ZIP
+- [HTTP Server](/docs/http-server/): routes and configuration
 - [API Reference](/docs/api-reference/)
 - [Contributing](/docs/contributing/)

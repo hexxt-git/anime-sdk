@@ -7,10 +7,7 @@ interface NotificationData {
   delay: number;
 }
 
-const NOTIFICATIONS: NotificationData[] = [
-  { id: 'manga', text: 'Now supports Manga', delay: 0.2 },
-  { id: 'downloads', text: 'Now supports Downloads', delay: 0.8 },
-];
+const NOTIFICATIONS: NotificationData[] = [{ id: 'manga', text: 'Now supports Manga', delay: 0.2 }];
 
 export default function Notification() {
   const [visibleNotifications, setVisibleNotifications] = useState<NotificationData[]>([]);

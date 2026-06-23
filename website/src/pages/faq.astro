@@ -10,11 +10,11 @@ const faqs = [
   },
   {
     q: 'Can I use anime-sdk in a browser app?',
-    a: 'No. anime-sdk runs in Node or Bun only. For a browser frontend, run the built-in HTTP server on your backend and call it over HTTP from the client. Set proxy: true when starting the server — it rewrites stream URLs so your frontend never has to deal with CDN headers or CORS.',
+    a: 'No. anime-sdk runs in Node or Bun only. For a browser frontend, run the built-in HTTP server on your backend and call it over HTTP from the client.',
   },
   {
     q: 'I got a stream back from sdk.stream(). How do I play it?',
-    a: "Check stream.isHls. If true, use hls.js on Chrome or Firefox, or a native &lt;video&gt; on Safari. If false, set stream.url directly as the video source. stream.origin.host tells you where it really came from. If you're running the HTTP server, all URLs are already proxied and work directly in the browser.",
+    a: 'Check stream.isHls. If true, use hls.js on Chrome or Firefox, or a native &lt;video&gt; on Safari. If false, set stream.url directly as the video source. stream.origin.host tells you where it really came from.',
   },
   {
     q: 'Which source gives the best results?',
@@ -39,18 +39,6 @@ const faqs = [
   {
     q: 'What happens when a source goes down?',
     a: "The SDK tries the next best available source automatically. If you need to disable a specific source, pass disabled: ['source-id'] to createSdk(). The live E2E tests hit real endpoints and fail the moment an upstream site breaks, which is how we catch when a source needs updating.",
-  },
-  {
-    q: 'Can I download episodes and chapters to disk?',
-    a: 'Yes. downloadVideo saves an episode as an MP4, downloadMangaChapter saves a chapter as a ZIP. Both are exported from anime-sdk. The HTTP server also has /download endpoints that stream progress back via SSE so you can show a progress bar.',
-  },
-  {
-    q: 'What does the proxy do?',
-    a: "The /proxy endpoint in the HTTP server fetches any URL on the server's behalf, attaching whatever headers the CDN requires. When you start the server with proxy: true, stream and subtitle URLs are automatically rewritten to go through it. Browser clients just use the URL directly — no extra headers needed, no CORS issues.",
-  },
-  {
-    q: 'Does anime-sdk cache anything?',
-    a: 'Not on its own. The HTTP server accepts a cache object with get and set methods — a plain Map, Redis, SQLite, anything works. Search results and episode lists are safe to cache for a long time. Do not cache stream URLs.',
   },
 ];
 ---

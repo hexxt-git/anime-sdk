@@ -1,4 +1,4 @@
-# anime-sdk 2.0
+# anime-sdk
 
 A TypeScript SDK for searching anime and manga, resolving playable streams and manga pages. Library-first — the SDK is the product, the bundled HTTP server is a convenience.
 
@@ -54,8 +54,8 @@ const trending = await sdk.browse({ list: 'trending', kind: 'anime' });
 ### HTTP server (one line)
 
 ```ts
-import { startServerV2 } from 'anime-sdk/server';
-await startServerV2({ port: 3030 }); // SDK auto-constructed from env
+import { startServer } from 'anime-sdk';
+startServer({ port: 3030 }); // SDK auto-constructed from env
 ```
 
 Or via CLI:
@@ -72,12 +72,7 @@ SOURCES_DISABLED=goyabu npx anime-sdk
 createSdk({
   sources: ['anilist', 'allmanga'], // whitelist
   disabled: ['goyabu'], // or blacklist
-  http: { timeoutMs: 10000, retries: 2 },
-  proxy: { signSecret: process.env.PROXY_SECRET },
-  cache: {
-    get: (k) => store.get(k),
-    set: (k, v) => store.set(k, v),
-  },
+  http: { timeoutMs: 10000, retries: 2, userAgent: 'my-app/1.0' },
 });
 ```
 
@@ -126,7 +121,7 @@ const results = await sdk.search('frieren', { kind: 'anime', signal: ac.signal }
 | `mangapill`     | mangapill.com      | manga       | chapters, pages      |
 | `weebcentral`   | weebcentral.com    | manga       | chapters, pages      |
 
-## Server routes (v2)
+## Server routes
 
 ```
 GET /search?q=…&kind=anime           → Media[]
@@ -142,9 +137,7 @@ GET /health                          → SourceHealth[]
 
 ## API reference
 
-Public exports: `createSdk`, `Sdk`, `AniError`, `AniErrorCode`, `Media`, `Episode`, `Chapter`, `Stream`, `Pages`, `List`, `SourceInfo`, `SdkOptions`, `Score`.
-
-Server: `startServerV2`, `ServerV2Options` (from `anime-sdk/server`).
+Public exports: `createSdk`, `Sdk`, `startServer`, `ServerOptions`, `AniError`, `AniErrorCode`, `Media`, `Episode`, `Chapter`, `Stream`, `Pages`, `List`, `SourceInfo`, `SdkOptions`, `Score`.
 
 All types are plain POJOs — `JSON.stringify` round-trips, safe for React state, Zustand, Redux.
 

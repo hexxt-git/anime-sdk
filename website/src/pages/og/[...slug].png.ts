@@ -22,42 +22,30 @@ export const pages: Record<string, { title: string; description: string; section
   index: {
     title: 'anime-sdk',
     description:
-      'Nine providers. A pluggable HTTP transport. An optional proxy server. Ship your anime app without touching a single stream URL.',
+      'Twelve sources behind one SDK. Search, episodes, streams, manga pages, and browse — without touching a single CDN URL yourself.',
   },
   faq: {
     title: 'FAQ',
     description:
-      'Common questions about providers, stream URLs, browser support, and when to use the HTTP server.',
+      'Common questions about sources, stream URLs, browser support, and when to use the HTTP server.',
     section: 'GENERAL',
   },
   'docs/index': {
     title: 'Getting Started',
     description:
-      'Install anime-sdk, shim DOMParser, pick a provider, and resolve your first stream in under ten lines of TypeScript.',
+      'Install anime-sdk, call createSdk(), and resolve your first stream in under ten lines of TypeScript.',
     section: 'DOCS',
   },
   'docs/http-server': {
     title: 'HTTP Server',
     description:
-      'Expose every provider over REST — /search, /content, /stream, /tracks — so any language or frontend can call anime-sdk over HTTP.',
-    section: 'DOCS',
-  },
-  'docs/proxy': {
-    title: 'Stream Proxy',
-    description:
-      'CDN streams block browsers with CORS and custom headers. Enable proxy: true and every URL becomes directly playable.',
-    section: 'DOCS',
-  },
-  'docs/download': {
-    title: 'Downloads',
-    description:
-      'Save anime episodes as MP4 via ffmpeg mux and manga chapters as ZIP archives with a single utility call.',
+      'Expose every SDK verb over REST — /search, /media/:id, /episode/:id/stream — so any language or frontend can call anime-sdk over HTTP.',
     section: 'DOCS',
   },
   'docs/api-reference': {
     title: 'API Reference',
     description:
-      'Every exported type, interface, and class — Media, Episode, Stream, Pages, AniError, createSdk, startServerV2, and more.',
+      'Every exported type, interface, and class — Media, Episode, Stream, Pages, AniError, createSdk, startServer, and more.',
     section: 'DOCS',
   },
   'docs/contributing': {

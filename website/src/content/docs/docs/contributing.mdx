@@ -37,7 +37,7 @@ Add one when the embed format isn't handled by `GenericHlsExtractor`, `Mp4Upload
 
 ## Architecture overview
 
-- **`src/internal/`**: `HttpClient`, `DomRegistry`, `HlsUtils`, `MappingClient`, `encodeId`/`decodeId`. Rarely changes for new sources.
+- **`src/internal/`**: `HttpClient`, `DomRegistry`, `HlsUtils`, `encodeId`/`decodeId`. Rarely changes for new sources.
 - **`src/extractors/`**: stateless embed parsers. Add one when an embed platform is genuinely novel.
 - **`src/sources/`**: site-specific adapters. One `Source` interface, optional capability methods.
 

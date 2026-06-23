@@ -6,15 +6,6 @@ export interface SdkOptions {
     retries?: number;
     userAgent?: string;
   };
-  proxy?: {
-    signSecret?: string;
-    allowedHosts?: string[];
-  };
-  cache?: {
-    get(k: string): unknown;
-    set(k: string, v: unknown): void;
-  };
-  ratelimit?: Record<string, number>;
 }
 
 const DEFAULTS: Required<Pick<SdkOptions, 'http'>> = {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { startServerV2 } from './index.js';
+import { startServer } from './index.js';
 import { createSdk } from '../sdk.js';
 import type { SdkOptions } from '../config.js';
 
@@ -32,7 +32,7 @@ if (process.argv.includes('--help') || process.argv.includes('-h')) {
 
 const { port, sdkOpts } = parseEnv();
 const sdk = createSdk(sdkOpts);
-const server = startServerV2({ port, sdk });
+const server = startServer({ port, sdk });
 
 server.on('listening', () => {
   const addr = server.address();

@@ -7,7 +7,7 @@ const get = (path: string, params: Record<string, string> = {}) =>
     return r.json();
   });
 
-// ─── SDK 2.0 types (mirrors src/types.ts) ────────────────────────────────────
+// ─── SDK types (mirrors src/types.ts) ────────────────────────────────────────
 
 export interface MediaTitle {
   preferred: string;
@@ -109,7 +109,7 @@ export interface SourceInfo {
   successRate?: number;
 }
 
-// ─── 2.0 API calls ───────────────────────────────────────────────────────────
+// ─── API calls ───────────────────────────────────────────────────────────────
 
 export const search = (q: string, kind: 'anime' | 'manga' = 'anime'): Promise<Media[]> =>
   get('/search', { q, kind });
