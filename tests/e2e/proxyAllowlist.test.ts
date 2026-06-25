@@ -1,28 +1,37 @@
 /**
- * Live test of the `/proxy` SSRF allowlist. Spawns a real server with
- * `proxyAllowedHosts: ['example.com']` and verifies:
- *   - allowed hosts are proxied successfully,
- *   - any other host is rejected with 403.
+ * Verifies the proxy SSRF allowlist.
+ *
+ * A target hostname not covered by `allowedHosts` must return 403; a hostname
+ * that suffix-matches an entry must succeed.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as http from 'node:http';
-import { HttpClient } from '../../src/transport/http.js';
-import { AllmangaProvider } from '../../src/providers/AllmangaProvider.js';
 import { startServer } from '../../src/server/index.js';
+import { createSdk } from '../../src/sdk.js';
 
 let server: http.Server;
 let baseUrl: string;
 
-beforeAll(async () => {
-  const httpClient = new HttpClient({ timeoutMs: 20_000 });
-  server = startServer({
-    providers: [new AllmangaProvider(httpClient)],
-    proxy: true,
-    proxyAllowedHosts: ['example.com'],
-    port: await freePort(),
+async function getFreePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const s = http.createServer();
+    s.listen(0, () => {
+      const p = (s.address() as http.AddressInfo).port;
+      s.close(() => resolve(p));
+    });
   });
-  const addr = server.address();
-  if (!addr || typeof addr === 'string') throw new Error('no address');
+}
+
+beforeAll(async () => {
+  const port = await getFreePort();
+  server = startServer({
+    port,
+    sdk: createSdk({ sources: ['anilist'] }),
+    // Suffix-matched: covers s4.anilist.co (and every other *.anilist.co).
+    proxy: { allowedHosts: ['anilist.co'] },
+  });
+  await new Promise<void>((r) => server.on('listening', r));
+  const addr = server.address() as http.AddressInfo;
   baseUrl = `http://127.0.0.1:${addr.port}`;
 });
 
@@ -30,36 +39,22 @@ afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-describe('/proxy SSRF allowlist', () => {
-  it('allows example.com and any of its subdomains', async () => {
-    const r = await fetch(`${baseUrl}/proxy?url=${encodeURIComponent('https://example.com/')}`);
-    expect(r.status).toBe(200);
-  }, 30_000);
+describe('proxy SSRF allowlist', () => {
+  it('allows a target whose hostname suffix-matches the allowlist', async () => {
+    const target = 'https://s4.anilist.co/file/anilistcdn/character/large/default.jpg';
+    const res = await fetch(`${baseUrl}/proxy?url=${encodeURIComponent(target)}`);
+    expect(res.status).toBe(200);
+    await res.arrayBuffer();
+  }, 20000);
 
-  it('rejects requests outside the allowlist with 403', async () => {
-    const r = await fetch(`${baseUrl}/proxy?url=${encodeURIComponent('https://wikipedia.org/')}`);
-    expect(r.status).toBe(403);
-    const body = (await r.json()) as { error: string };
-    expect(body.error).toMatch(/allowlist/);
+  it('rejects a target whose hostname is outside the allowlist', async () => {
+    const target = 'https://example.com/';
+    const res = await fetch(`${baseUrl}/proxy?url=${encodeURIComponent(target)}`);
+    expect(res.status).toBe(403);
   });
 
-  it('rejects 400 on a malformed url', async () => {
-    const r = await fetch(`${baseUrl}/proxy?url=${encodeURIComponent('not a url')}`);
-    expect(r.status).toBe(400);
+  it('rejects a malformed url', async () => {
+    const res = await fetch(`${baseUrl}/proxy?url=not-a-url`);
+    expect(res.status).toBe(400);
   });
 });
-
-async function freePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const s = http.createServer();
-    s.listen(0, () => {
-      const addr = s.address();
-      if (!addr || typeof addr === 'string') {
-        reject(new Error('no address'));
-        return;
-      }
-      const port = addr.port;
-      s.close(() => resolve(port));
-    });
-  });
-}

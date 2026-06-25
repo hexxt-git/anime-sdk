@@ -12,22 +12,35 @@ function buildCrumbs(pathname: string, sp: URLSearchParams): Crumb[] {
   const ep = sp.get('ep');
   const type = sp.get('type');
 
-  const crumbs: Crumb[] = [{ label: 'anime-sdk', href: `/` }];
+  const crumbs: Crumb[] = [{ label: 'anime-sdk', href: '/' }];
 
-  if (provider) {
-    const providerHref = `/?provider=${provider}`;
-    crumbs.push(pathname === '/' ? { label: provider } : { label: provider, href: providerHref });
+  if (pathname === '/search') {
+    crumbs.push({ label: 'search' });
+    return crumbs;
   }
 
-  if (title) {
-    const mid = sp.get('mid');
-    const episodesHref = mid
-      ? `/episodes?provider=${provider}&mid=${encodeURIComponent(mid)}&title=${encodeURIComponent(title)}${type ? `&type=${type}` : ''}`
-      : undefined;
-    crumbs.push(pathname === '/episodes' ? { label: title } : { label: title, href: episodesHref });
+  if (pathname === '/media') {
+    if (title) crumbs.push({ label: title });
+    return crumbs;
   }
 
-  if (ep) crumbs.push({ label: ep });
+  if (pathname === '/episodes') {
+    if (provider) crumbs.push({ label: provider, href: `/?provider=${provider}` });
+    if (title) crumbs.push({ label: title });
+    return crumbs;
+  }
+
+  if (pathname === '/stream') {
+    if (provider) {
+      const epHref = `/episodes?provider=${provider}&mid=${encodeURIComponent(sp.get('mid') ?? '')}&title=${encodeURIComponent(title ?? '')}&type=${type ?? 'ANIME'}`;
+      crumbs.push({ label: provider, href: `/?provider=${provider}` });
+      if (title) crumbs.push({ label: title, href: epHref });
+    }
+    if (ep) crumbs.push({ label: ep });
+    return crumbs;
+  }
+
+  if (provider) crumbs.push({ label: provider });
 
   return crumbs;
 }
@@ -38,27 +51,35 @@ export default function Layout() {
   const crumbs = buildCrumbs(loc.pathname, sp);
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] font-mono text-sm text-[#d0d0d0]">
+    <div className="bg-base-100 text-base-850 min-h-screen font-mono text-sm">
       <div className="mx-auto max-w-3xl">
-        <header className="flex items-center gap-3 border-b border-[#1e1e1e] px-4 py-3">
-          <img src="/anime-sdk.svg" width="16" height="16" alt="anime-sdk logo" />
-          <div className="flex items-center gap-0">
-            {crumbs.map((c, i) => (
-              <Fragment key={i}>
-                {i > 0 && <span className="mx-2 text-[#2a2a2a] select-none">/</span>}
-                {c.href ? (
-                  <Link
-                    to={c.href}
-                    className="text-xs tracking-widest text-[#555] transition-colors hover:text-[#999]"
-                  >
-                    {c.label}
-                  </Link>
-                ) : (
-                  <span className="text-xs tracking-widest text-[#ccc]">{c.label}</span>
-                )}
-              </Fragment>
-            ))}
+        <header className="border-base-200 flex items-center justify-between border-b px-4 py-3">
+          <div className="flex items-center gap-3">
+            <img src="/anime-sdk.svg" width="16" height="16" alt="anime-sdk logo" />
+            <div className="flex items-center gap-0">
+              {crumbs.map((c, i) => (
+                <Fragment key={i}>
+                  {i > 0 && <span className="text-base-300 mx-2 select-none">/</span>}
+                  {c.href ? (
+                    <Link
+                      to={c.href}
+                      className="text-base-450 hover:text-base-650 text-xs tracking-widest transition-colors"
+                    >
+                      {c.label}
+                    </Link>
+                  ) : (
+                    <span className="text-base-800 text-xs tracking-widest">{c.label}</span>
+                  )}
+                </Fragment>
+              ))}
+            </div>
           </div>
+          <Link
+            to="/search"
+            className="text-base-400 hover:text-base-600 text-[10px] tracking-widest transition-colors"
+          >
+            SEARCH
+          </Link>
         </header>
         <Outlet />
       </div>

@@ -1,27 +1,25 @@
-import { execSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
-import { IVideoPayload, IMangaPayload } from '../types/index.js';
-
-// ─── Types ───────────────────────────────────────────────────────────────────
+import { execSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import type { Stream, Pages } from '../types.js';
 
 export interface DownloadVideoOptions {
-  /** Called periodically with progress info. */
+  /** Called with phase/detail strings as the download progresses. */
   onProgress?: (info: { phase: string; detail?: string }) => void;
-  /** Timeout in ms for the overall ffmpeg process. Default 300000 (5 min). */
+  /** Overall ffmpeg timeout in ms (default 300000). */
   timeoutMs?: number;
+  /** Override stream headers (defaults to `stream.headers`). */
+  headers?: Record<string, string>;
 }
 
 export interface DownloadVideoResult {
   outputPath: string;
-  stream: IVideoPayload;
   fileSize: number;
 }
 
 export interface DownloadMangaPageOptions {
-  /** Custom headers to use instead of the ones on IMangaPayload. */
   headers?: Record<string, string>;
-  /** Timeout in ms for the fetch. Default 30000. */
+  /** Single-page fetch timeout in ms (default 30000). */
   timeoutMs?: number;
 }
 
@@ -33,10 +31,10 @@ export interface DownloadMangaPageResult {
 }
 
 export interface DownloadMangaChapterOptions {
-  /** Called periodically with progress info. */
   onProgress?: (info: { downloaded: number; total: number }) => void;
-  /** Timeout in ms per page fetch. Default 30000. */
+  /** Per-page fetch timeout in ms (default 30000). */
   timeoutMs?: number;
+  headers?: Record<string, string>;
 }
 
 export interface DownloadMangaChapterResult {
@@ -52,10 +50,6 @@ interface HlsSegment {
   duration: number;
 }
 
-/**
- * Parse an M3U8 master playlist and return variant playlist URLs,
- * ordered as they appear (typically lowest → highest quality).
- */
 export function parseHlsMaster(content: string, baseUrl: string): string[] {
   const variants: string[] = [];
   for (const line of content.split('\n').map((l) => l.trim())) {
@@ -69,9 +63,6 @@ export function parseHlsMaster(content: string, baseUrl: string): string[] {
   return variants;
 }
 
-/**
- * Parse an M3U8 media playlist and return segment URLs with durations.
- */
 export function parseHlsSegments(content: string, baseUrl: string): HlsSegment[] {
   const segments: HlsSegment[] = [];
   let dur = 0;
@@ -90,9 +81,6 @@ export function parseHlsSegments(content: string, baseUrl: string): HlsSegment[]
   return segments;
 }
 
-/**
- * Detect image file extension from Content-Type header.
- */
 export function detectImageExtension(contentType: string): string {
   const ct = contentType.toLowerCase();
   if (ct.includes('png')) return '.png';
@@ -100,11 +88,8 @@ export function detectImageExtension(contentType: string): string {
   if (ct.includes('gif')) return '.gif';
   if (ct.includes('bmp')) return '.bmp';
   if (ct.includes('avif')) return '.avif';
-  // Default to jpg for jpeg, octet-stream, or unknown
   return '.jpg';
 }
-
-// ─── Default fetch headers ──────────────────────────────────────────────────
 
 const DEFAULT_UA =
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -115,85 +100,57 @@ function mergeHeaders(extra?: Record<string, string>): Record<string, string> {
 
 // ─── Video Download ─────────────────────────────────────────────────────────
 
-/**
- * Download a video stream to a `.mp4` file. Tries each stream candidate in
- * order until one succeeds. HLS streams are muxed via `ffmpeg -i <url> -c copy`.
- * Direct MP4 streams are downloaded via fetch.
- *
- * @param streams - One or more `IVideoPayload` candidates (from `resolveStream`)
- * @param outputPath - Destination file path (must end in `.mp4`)
- * @param options - Optional progress/timeout configuration
- * @returns Info about the successful download
- */
 export async function downloadVideo(
-  streams: IVideoPayload | IVideoPayload[],
+  stream: Stream,
   outputPath: string,
   options?: DownloadVideoOptions,
 ): Promise<DownloadVideoResult> {
-  const list = Array.isArray(streams) ? streams : [streams];
-  if (list.length === 0) throw new Error('downloadVideo: streams array is empty');
+  const headers = options?.headers ?? stream.headers ?? {};
 
   const dir = path.dirname(outputPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const timeout = options?.timeoutMs ?? 300_000;
-  const errors: string[] = [];
 
-  for (let i = 0; i < list.length; i++) {
-    const candidate = list[i];
-    options?.onProgress?.({
-      phase: 'resolving',
-      detail: `Trying candidate ${i + 1}/${list.length}: ${candidate.sourceUrl.slice(0, 120)}`,
-    });
+  let target = stream.url;
+  let hls = stream.isHls;
 
-    try {
-      let target = candidate.sourceUrl;
-      let isHls = candidate.isHLS;
-      const headers = candidate.headers ?? {};
-
-      // Probe if we're not sure
-      if (!isHls && !target.includes('.m3u8') && !target.includes('.mp4')) {
-        const probed = await probeIsVideo(target, headers);
-        if (!probed.isVideo) {
-          const scraped = await scrapeForStreamUrl(target, headers);
-          if (scraped) {
-            target = scraped.url;
-            isHls = scraped.isHls;
-          }
-        }
+  if (!hls && !target.includes('.m3u8') && !target.includes('.mp4')) {
+    const probed = await probeIsVideo(target, headers);
+    if (!probed.isVideo) {
+      const scraped = await scrapeForStreamUrl(target, headers);
+      if (scraped) {
+        target = scraped.url;
+        hls = scraped.isHls;
       }
-
-      if (isHls || target.includes('.m3u8')) {
-        options?.onProgress?.({
-          phase: 'downloading',
-          detail: 'Downloading HLS segments manually',
-        });
-        await downloadHlsSegments(target, outputPath, headers, timeout, options?.onProgress);
-      } else {
-        options?.onProgress?.({ phase: 'downloading', detail: 'Downloading MP4 directly' });
-        await downloadMp4Direct(target, outputPath, headers, timeout);
-      }
-
-      const stat = fs.statSync(outputPath);
-      if (stat.size < 1024) {
-        throw new Error(`Downloaded file is too small (${stat.size} bytes)`);
-      }
-
-      options?.onProgress?.({ phase: 'complete', detail: outputPath });
-      return { outputPath, stream: candidate, fileSize: stat.size };
-    } catch (e) {
-      const msg = (e as Error).message;
-      errors.push(`#${i + 1} (${candidate.sourceUrl.slice(0, 60)}…): ${msg}`);
     }
   }
 
-  throw new Error(
-    `downloadVideo exhausted all ${list.length} candidate(s).\n` +
-      errors.map((e) => `  - ${e}`).join('\n'),
-  );
+  options?.onProgress?.({
+    phase: 'resolving',
+    detail: `Downloading: ${target.slice(0, 120)}`,
+  });
+
+  if (hls || target.includes('.m3u8')) {
+    options?.onProgress?.({
+      phase: 'downloading',
+      detail: 'Downloading HLS segments',
+    });
+    await downloadHlsSegments(target, outputPath, headers, timeout, options?.onProgress);
+  } else {
+    options?.onProgress?.({ phase: 'downloading', detail: 'Downloading MP4 directly' });
+    await downloadMp4Direct(target, outputPath, headers, timeout);
+  }
+
+  const stat = fs.statSync(outputPath);
+  if (stat.size < 1024) {
+    throw new Error(`Downloaded file is too small (${stat.size} bytes)`);
+  }
+
+  options?.onProgress?.({ phase: 'complete', detail: outputPath });
+  return { outputPath, fileSize: stat.size };
 }
 
-/** Probe a URL to check if it serves video bytes. */
 async function probeIsVideo(
   url: string,
   headers: Record<string, string>,
@@ -224,7 +181,6 @@ async function probeIsVideo(
   }
 }
 
-/** Scrape an HTML embed page for a stream URL. */
 async function scrapeForStreamUrl(
   pageUrl: string,
   headers: Record<string, string>,
@@ -271,6 +227,8 @@ async function scrapeForStreamUrl(
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const IEND_MAGIC = Buffer.from([0x49, 0x45, 0x4e, 0x44]);
 
+// Some CDNs disguise .ts segments as PNGs to evade adblockers. Strip the
+// header so ffmpeg sees a clean transport stream.
 function stripPngHeader(buffer: Buffer): Buffer {
   if (buffer.length > 8 && buffer.subarray(0, 8).equals(PNG_MAGIC)) {
     const idx = buffer.indexOf(IEND_MAGIC);
@@ -282,10 +240,6 @@ function stripPngHeader(buffer: Buffer): Buffer {
   return buffer;
 }
 
-/**
- * Download an HLS stream by manually downloading segments, stripping PNG headers,
- * and concatenating them into a temp file, then muxing to MP4 using ffmpeg.
- */
 async function downloadHlsSegments(
   playlistUrl: string,
   outputPath: string,
@@ -299,11 +253,10 @@ async function downloadHlsSegments(
     throw new Error(`Playlist ${res.status} ${res.statusText} (${currentUrl.slice(0, 120)})`);
   let playlist = await res.text();
 
-  // Walk down master → variant playlists (max 2 hops)
   for (let hops = 0; hops < 2 && playlist.includes('#EXT-X-STREAM-INF'); hops++) {
     const variants = parseHlsMaster(playlist, currentUrl);
     if (variants.length === 0) throw new Error('Master playlist has no variants');
-    currentUrl = variants[variants.length - 1]; // pick highest quality (last)
+    currentUrl = variants[variants.length - 1];
     res = await fetch(currentUrl, { headers: mergeHeaders(headers) });
     if (!res.ok) throw new Error(`Variant ${res.status} (${currentUrl.slice(0, 120)})`);
     playlist = await res.text();
@@ -320,10 +273,7 @@ async function downloadHlsSegments(
   const fd = fs.openSync(tmpTs, 'a');
   try {
     for (let i = 0; i < segments.length; i++) {
-      onProgress?.({
-        phase: 'downloading',
-        detail: `Segment ${i + 1}/${segments.length}`,
-      });
+      onProgress?.({ phase: 'downloading', detail: `Segment ${i + 1}/${segments.length}` });
 
       const seg = segments[i];
       const segRes = await fetch(seg.url, { headers: mergeHeaders(headers) });
@@ -346,23 +296,19 @@ async function downloadHlsSegments(
     '-c copy',
     '-movflags +faststart',
     JSON.stringify(outputPath),
-  ]
-    .filter(Boolean)
-    .join(' ');
+  ].join(' ');
 
   try {
     execSync(cmd, { stdio: 'pipe', timeout: timeoutMs, maxBuffer: 50 * 1024 * 1024 });
-  } catch (e: any) {
-    const stderr = e.stderr ? e.stderr.toString() : '';
-    throw new Error(`ffmpeg failed: ${e.message}\n${stderr}`);
+  } catch (e) {
+    const err = e as { stderr?: Buffer; message: string };
+    const stderr = err.stderr ? err.stderr.toString() : '';
+    throw new Error(`ffmpeg failed: ${err.message}\n${stderr}`);
   }
 
   if (fs.existsSync(tmpTs)) fs.unlinkSync(tmpTs);
 }
 
-/**
- * Download a direct MP4 URL to disk using fetch streaming.
- */
 async function downloadMp4Direct(
   mp4Url: string,
   outputPath: string,
@@ -373,10 +319,7 @@ async function downloadMp4Direct(
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
   try {
-    const res = await fetch(mp4Url, {
-      headers: mergeHeaders(headers),
-      signal: ctrl.signal,
-    });
+    const res = await fetch(mp4Url, { headers: mergeHeaders(headers), signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
     if (!res.body) throw new Error('Response body is null');
 
@@ -399,38 +342,27 @@ async function downloadMp4Direct(
 
 // ─── Manga Download ─────────────────────────────────────────────────────────
 
-/**
- * Download a single manga page image to disk.
- *
- * @param pages - The `IMangaPayload` from `resolveStream`
- * @param pageIndex - 0-based page index
- * @param outputDir - Directory to save the image (filename is auto-generated)
- * @param options - Optional configuration
- */
 export async function downloadMangaPage(
-  pages: IMangaPayload,
+  pages: Pages,
   pageIndex: number,
   outputDir: string,
   options?: DownloadMangaPageOptions,
 ): Promise<DownloadMangaPageResult> {
-  if (pageIndex < 0 || pageIndex >= pages.imageUrls.length) {
-    throw new Error(`Page index ${pageIndex} out of range (0-${pages.imageUrls.length - 1})`);
+  if (pageIndex < 0 || pageIndex >= pages.pages.length) {
+    throw new Error(`Page index ${pageIndex} out of range (0-${pages.pages.length - 1})`);
   }
 
   if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
-  const url = pages.imageUrls[pageIndex];
-  const headers = options?.headers ?? pages.headers ?? {};
+  const url = pages.pages[pageIndex].url;
+  const headers = options?.headers ?? {};
   const timeout = options?.timeoutMs ?? 30_000;
 
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeout);
 
   try {
-    const res = await fetch(url, {
-      headers: mergeHeaders(headers),
-      signal: ctrl.signal,
-    });
+    const res = await fetch(url, { headers: mergeHeaders(headers), signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching page ${pageIndex}`);
 
     const contentType = res.headers.get('content-type') ?? 'image/jpeg';
@@ -448,43 +380,31 @@ export async function downloadMangaPage(
   }
 }
 
-/**
- * Download an entire manga chapter as a `.zip` archive.
- * Uses a minimal zero-dependency ZIP writer (STORE method — images are
- * already compressed, so no deflation needed).
- *
- * @param pages - The `IMangaPayload` from `resolveStream`
- * @param outputPath - Destination `.zip` file path
- * @param options - Optional configuration
- */
 export async function downloadMangaChapter(
-  pages: IMangaPayload,
+  pages: Pages,
   outputPath: string,
   options?: DownloadMangaChapterOptions,
 ): Promise<DownloadMangaChapterResult> {
-  if (pages.imageUrls.length === 0) {
+  if (pages.pages.length === 0) {
     throw new Error('downloadMangaChapter: no pages to download');
   }
 
   const dir = path.dirname(outputPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
-  const headers = pages.headers ?? {};
+  const headers = options?.headers ?? {};
   const timeout = options?.timeoutMs ?? 30_000;
   const entries: ZipEntry[] = [];
 
-  for (let i = 0; i < pages.imageUrls.length; i++) {
-    options?.onProgress?.({ downloaded: i, total: pages.imageUrls.length });
+  for (let i = 0; i < pages.pages.length; i++) {
+    options?.onProgress?.({ downloaded: i, total: pages.pages.length });
 
-    const url = pages.imageUrls[i];
+    const url = pages.pages[i].url;
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), timeout);
 
     try {
-      const res = await fetch(url, {
-        headers: mergeHeaders(headers),
-        signal: ctrl.signal,
-      });
+      const res = await fetch(url, { headers: mergeHeaders(headers), signal: ctrl.signal });
       if (!res.ok) throw new Error(`HTTP ${res.status} fetching page ${i}`);
 
       const contentType = res.headers.get('content-type') ?? 'image/jpeg';
@@ -499,20 +419,15 @@ export async function downloadMangaChapter(
     }
   }
 
-  options?.onProgress?.({ downloaded: pages.imageUrls.length, total: pages.imageUrls.length });
+  options?.onProgress?.({ downloaded: pages.pages.length, total: pages.pages.length });
 
   const zipBuffer = createZipBuffer(entries);
   fs.writeFileSync(outputPath, zipBuffer);
 
-  return {
-    outputPath,
-    pageCount: entries.length,
-    fileSize: zipBuffer.length,
-  };
+  return { outputPath, pageCount: entries.length, fileSize: zipBuffer.length };
 }
 
 // ─── Minimal ZIP Writer (STORE, no compression) ─────────────────────────────
-// Implements the ZIP spec just enough for uncompressed archives.
 // Images are already compressed (JPEG/PNG/WebP), so STORE is optimal.
 
 interface ZipEntry {
@@ -520,17 +435,13 @@ interface ZipEntry {
   data: Buffer;
 }
 
-/** CRC-32 lookup table. */
 const crc32Table: number[] = [];
 for (let i = 0; i < 256; i++) {
   let c = i;
-  for (let j = 0; j < 8; j++) {
-    c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  }
+  for (let j = 0; j < 8; j++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
   crc32Table[i] = c;
 }
 
-/** Compute CRC-32 for a buffer. */
 export function crc32(buf: Buffer): number {
   let crc = 0xffffffff;
   for (let i = 0; i < buf.length; i++) {
@@ -539,10 +450,6 @@ export function crc32(buf: Buffer): number {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-/**
- * Create a ZIP file buffer from an array of entries using the STORE method.
- * No compression — perfect for already-compressed image data.
- */
 export function createZipBuffer(entries: ZipEntry[]): Buffer {
   const parts: Buffer[] = [];
   const centralDirEntries: Buffer[] = [];
@@ -553,42 +460,40 @@ export function createZipBuffer(entries: ZipEntry[]): Buffer {
     const crcVal = crc32(entry.data);
     const size = entry.data.length;
 
-    // Local File Header (30 bytes + filename)
     const local = Buffer.alloc(30 + nameBytes.length);
-    local.writeUInt32LE(0x04034b50, 0); // Local file header signature
-    local.writeUInt16LE(20, 4); // Version needed to extract (2.0)
-    local.writeUInt16LE(0, 6); // General purpose bit flag
-    local.writeUInt16LE(0, 8); // Compression method: STORE
-    local.writeUInt16LE(0, 10); // Last mod file time
-    local.writeUInt16LE(0, 12); // Last mod file date
-    local.writeUInt32LE(crcVal, 14); // CRC-32
-    local.writeUInt32LE(size, 18); // Compressed size
-    local.writeUInt32LE(size, 22); // Uncompressed size
-    local.writeUInt16LE(nameBytes.length, 26); // Filename length
-    local.writeUInt16LE(0, 28); // Extra field length
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(0, 10);
+    local.writeUInt16LE(0, 12);
+    local.writeUInt32LE(crcVal, 14);
+    local.writeUInt32LE(size, 18);
+    local.writeUInt32LE(size, 22);
+    local.writeUInt16LE(nameBytes.length, 26);
+    local.writeUInt16LE(0, 28);
     nameBytes.copy(local, 30);
 
     parts.push(local, entry.data);
 
-    // Central Directory File Header (46 bytes + filename)
     const central = Buffer.alloc(46 + nameBytes.length);
-    central.writeUInt32LE(0x02014b50, 0); // Central directory signature
-    central.writeUInt16LE(20, 4); // Version made by
-    central.writeUInt16LE(20, 6); // Version needed
-    central.writeUInt16LE(0, 8); // General purpose bit flag
-    central.writeUInt16LE(0, 10); // Compression method: STORE
-    central.writeUInt16LE(0, 12); // Last mod file time
-    central.writeUInt16LE(0, 14); // Last mod file date
-    central.writeUInt32LE(crcVal, 16); // CRC-32
-    central.writeUInt32LE(size, 20); // Compressed size
-    central.writeUInt32LE(size, 24); // Uncompressed size
-    central.writeUInt16LE(nameBytes.length, 28); // Filename length
-    central.writeUInt16LE(0, 30); // Extra field length
-    central.writeUInt16LE(0, 32); // File comment length
-    central.writeUInt16LE(0, 34); // Disk number start
-    central.writeUInt16LE(0, 36); // Internal file attributes
-    central.writeUInt32LE(0, 38); // External file attributes
-    central.writeUInt32LE(offset, 42); // Relative offset of local header
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(0, 12);
+    central.writeUInt16LE(0, 14);
+    central.writeUInt32LE(crcVal, 16);
+    central.writeUInt32LE(size, 20);
+    central.writeUInt32LE(size, 24);
+    central.writeUInt16LE(nameBytes.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(offset, 42);
     nameBytes.copy(central, 46);
 
     centralDirEntries.push(central);
@@ -600,16 +505,15 @@ export function createZipBuffer(entries: ZipEntry[]): Buffer {
   const centralDir = Buffer.concat(centralDirEntries);
   const centralDirSize = centralDir.length;
 
-  // End of Central Directory Record (22 bytes)
   const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0); // EOCD signature
-  eocd.writeUInt16LE(0, 4); // Disk number
-  eocd.writeUInt16LE(0, 6); // Disk with central directory
-  eocd.writeUInt16LE(entries.length, 8); // Entries on this disk
-  eocd.writeUInt16LE(entries.length, 10); // Total entries
-  eocd.writeUInt32LE(centralDirSize, 12); // Central directory size
-  eocd.writeUInt32LE(centralDirOffset, 16); // Central directory offset
-  eocd.writeUInt16LE(0, 20); // ZIP file comment length
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralDirSize, 12);
+  eocd.writeUInt32LE(centralDirOffset, 16);
+  eocd.writeUInt16LE(0, 20);
 
   parts.push(centralDir, eocd);
   return Buffer.concat(parts);

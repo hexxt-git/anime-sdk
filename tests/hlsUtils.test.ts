@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { HttpClient } from '../src/transport/http.js';
-import { HlsUtils } from '../src/transport/hlsUtils.js';
+import { HttpClient } from '../src/internal/http.js';
+import { HlsUtils } from '../src/internal/hls.js';
 
 describe('HlsUtils', () => {
   it('should return unmodified manifest when no proxy is configured', () => {

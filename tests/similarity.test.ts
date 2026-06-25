@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeTitle, diceSimilarity, bestSimilarity } from '../src/meta/similarity.js';
+import { normalizeTitle, diceSimilarity, bestSimilarity } from '../src/internal/similarity.js';
 
 describe('normalizeTitle', () => {
   it('lowercases and strips punctuation', () => {

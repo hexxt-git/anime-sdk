@@ -1,72 +1,30 @@
 ---
-title: Kitsu
-description: How to use the KitsuMeta metadata provider in anime-sdk.
+title: kitsu
+description: Kitsu JSON:API catalogue source — search and info with cross-catalogue mappings.
 ---
 
-`KitsuMeta` is the Kitsu front-end, backed by the public
-[`kitsu.io`](https://kitsu.io) JSON:API. Kitsu's catalogue is smaller
-than AniList's or MAL's, but it ships a rich cross-source mapping graph
-— making it especially useful when callers already have a Kitsu ID, or
-when you want to enrich your `IMediaMappings` with AniList/MAL/AniDB/TVDB
-links.
+`KitsuSource` queries `kitsu.io/api/edge` and returns `Media` records. Uniquely surfaces cross-catalogue mappings (AniList/MAL/AniDB/TVDB) from Kitsu's relationship graph.
 
-No API key required.
+## Capabilities
+
+- `search(query, kind)` — full-text search
+- `info(id)` — full `Media` record including cross-catalogue mappings
 
 ## Usage
 
 ```ts
-import { HttpClient, KitsuMeta, AllmangaProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const meta = new KitsuMeta(http);
+const sdk = createSdk({ sources: ['kitsu'] });
 
-const info = await meta.fetchMediaInfo('kitsu:anime:1');
-console.log(info.mappings); // { kitsu: 1, mal: ..., anilist: ..., anidb: ... }
-
-const allmanga = new AllmangaProvider(http);
-const stream = await meta.resolveStream('kitsu:anime:1', 1, allmanga, 'sub');
+const results = await sdk.search('Cowboy Bebop', { kind: 'anime' });
+// results[0].mappings.kitsu → 1
+// results[0].mappings.mal   → 1 (when Kitsu has the mapping)
 ```
 
-## URN shape — typed
+## Notes
 
-Like MAL, Kitsu integer IDs aren't globally unique across anime/manga.
-The URN encodes the catalogue kind:
-
-```
-kitsu:anime:1
-kitsu:manga:13
-```
-
-Legacy bare URNs (`kitsu:1`) still resolve.
-
-## Cross-source mappings
-
-Kitsu's relationship graph publishes per-record `mappings` to MAL,
-AniList, AniDB, and TheTVDB. `KitsuMeta.fetchMediaInfo` pulls them
-through to `IMediaMetadata.mappings`, so you can pivot to a different
-metadata layer without a second lookup:
-
-```ts
-const info = await kitsuMeta.fetchMediaInfo('kitsu:anime:1');
-if (info.mappings?.anilist) {
-  const anilistInfo = await anilistMeta.fetchMediaInfo(`anilist:${info.mappings.anilist}`);
-}
-```
-
-## Characteristics
-
-| Feature                   | Details                                                |
-| ------------------------- | ------------------------------------------------------ |
-| **Catalogues**            | Anime + Manga                                          |
-| **Native ID shape**       | `kitsu:anime:<integer>` / `kitsu:manga:<integer>`      |
-| **Endpoint**              | `kitsu.io/api/edge` (free, keyless)                    |
-| **Rate limit (built-in)** | 100 req/min                                            |
-| **Enrichments**           | cross-source `mappings` (AniList / MAL / AniDB / TVDB) |
-| **Browse**                | not implemented                                        |
-
-:::note
-Kitsu fronts its API with Cloudflare. In some network paths (cloud
-runners, certain VPNs) the JSON:API may be unreachable. That's an
-infrastructure issue, not an SDK one — combine with the proxy or run
-from a network that can reach `kitsu.io`.
-:::
+- No API key required.
+- `info()` includes a `?include=mappings` query that populates `media.mappings.anilist`, `media.mappings.mal`, etc.
+- Kitsu doesn't expose a season enum — `media.season` is always undefined.
+- Score is parsed from `averageRating` (a string like `"78.56"`) and rounded to an integer with `scale: 100`.

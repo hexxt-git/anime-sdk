@@ -1,29 +1,28 @@
 ---
-title: MangaPill
-description: How to use the MangapillProvider in anime-sdk.
+title: mangapill
+description: Manga source for mangapill.com — HTML scraping for chapters and pages.
 ---
 
-The `MangapillProvider` scrapes `mangapill.com`. It is known for its efficient layout and fast loading of chapter pages.
+`MangapillSource` scrapes `mangapill.com`. Reliable fallback for manga not found on MangaDex.
+
+## Capabilities
+
+- `search`, `chapters`, `pages`
 
 ## Usage
 
 ```ts
-import { HttpClient, MangapillProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const provider = new MangapillProvider(http);
+const sdk = createSdk({ sources: ['mangapill'] });
 
-const results = await provider.search('Frieren');
-const chapters = await provider.fetchContentUnits(results[0].id);
-const pages = await provider.resolveStream(chapters[0].id);
+const results = await sdk.search('Frieren', { kind: 'manga' });
+const { items: chapters } = await sdk.chapters(results[0]);
+const pages = await sdk.pages(chapters[0]);
 ```
 
-## Characteristics
+## Notes
 
-| Feature       | Details       |
-| ------------- | ------------- |
-| **Catalog**   | Manga         |
-| **Languages** | `sub`         |
-| **Method**    | HTML scraping |
-
-MangaPill is a solid choice for mainstream manga, offering a simple and effective way to access chapter image lists.
+- HTML scraping — may break if the site changes its layout.
+- Images are in `.js-page` elements with `data-src` attributes.
+- Requires `Referer: https://mangapill.com` and `User-Agent` headers.

@@ -1,43 +1,30 @@
 ---
-title: AnimeParadise
-description: How to use the AnimeParadiseProvider in anime-sdk.
+title: animeparadise
+description: Anime playback source for animeparadise.moe with external VTT subtitle tracks.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
+`AnimeParadiseSource` uses the `api.animeparadise.moe` REST API. The best option when you need **external subtitle tracks** — the VTT URLs are served separately and can be passed directly to `<track>` elements.
 
-The `AnimeParadiseProvider` connects to `animeparadise.moe`. It is a reliable provider with a clean REST API and support for external subtitle tracks.
+## Capabilities
+
+- `search`, `episodes`, `stream`
 
 ## Usage
 
 ```ts
-import { HttpClient, AnimeParadiseProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const provider = new AnimeParadiseProvider(http);
+const sdk = createSdk({ sources: ['anilist', 'animeparadise'] });
 
-const results = await provider.search('Frieren');
-const units = await provider.fetchContentUnits(results[0].id);
-
-// AnimeParadise supports fetchUnitTracks for cheap metadata
-if (provider.fetchUnitTracks) {
-  const tracks = await provider.fetchUnitTracks(units[0].id);
-  console.log(tracks.subtitles);
-}
-
-const stream = await provider.resolveStream(units[0].id);
+const results = await sdk.search('Frieren', { kind: 'anime' });
+const { items: episodes } = await sdk.episodes(results[0]);
+const stream = await sdk.stream(episodes[0], { language: 'sub' });
+// stream.subtitles → external VTT subtitle tracks
+// stream.isHls → true (HLS master playlist)
 ```
 
-## Characteristics
+## Notes
 
-| Feature       | Details                       |
-| ------------- | ----------------------------- |
-| **Catalog**   | Anime                         |
-| **Languages** | `sub`                         |
-| **Subtitles** | yes (VTT)                     |
-| **Method**    | REST API                      |
-| **HLS**       | Multi-quality master playlist |
-
-<Aside type="note">
-  AnimeParadise uses signed tokens for stream links. These links are tied to the requester's IP and
-  expire after a short period.
-</Aside>
+- Sub only (no dub).
+- Subtitle URLs are sourced from `episode.subData` and normalized via `normalizeSubtitleEntries`.
+- The HLS stream is served via `stream.animeparadise.moe/m3u8?url=...`.

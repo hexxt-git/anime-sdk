@@ -1,39 +1,28 @@
-import {
-  HttpClient,
-  startServer,
-  GogoanimeProvider,
-  GoyabuProvider,
-  AllmangaProvider,
-  AnimeParadiseProvider,
-  AnikotoProvider,
-  MegaPlayProvider,
-  MangadexProvider,
-  WeebcentralProvider,
-  MangapillProvider,
-} from '../dist/index.js';
+import { startServer, createSdk } from '../dist/index.js';
 
-const http = new HttpClient({ timeoutMs: 30000 });
+const port = Number(process.env.PORT ?? 3030);
 
-// simple cache
-const store = new Map();
-const cache = {
-  get: (key) => store.get(key),
-  set: (key, value) => store.set(key, value),
-};
+const sdk = createSdk({
+  http: { timeoutMs: 30000 },
+});
+
+// Proxy is enabled by default so the example frontend can play streams
+// from CDNs that gate on `Referer` (megaplay, wix, googlevideo, …).
+// Set PROXY_SIGN_SECRET in production; PROXY_ALLOWED_HOSTS is a
+// suffix-matched SSRF allowlist (e.g. "wixstatic.com,megacdn.co").
+const allowedHosts = process.env.PROXY_ALLOWED_HOSTS
+  ? process.env.PROXY_ALLOWED_HOSTS.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  : undefined;
 
 startServer({
-  providers: [
-    new GogoanimeProvider(http),
-    new GoyabuProvider(http),
-    new AllmangaProvider(http),
-    new AnimeParadiseProvider(http),
-    new AnikotoProvider(http),
-    new MegaPlayProvider(http),
-    new MangadexProvider(http),
-    new WeebcentralProvider(http),
-    new MangapillProvider(http),
-  ],
-  port: Number(process.env.PORT ?? 3030),
-  proxy: true,
-  cache,
+  port,
+  sdk,
+  proxy: {
+    signSecret: process.env.PROXY_SIGN_SECRET,
+    allowedHosts,
+  },
 });
+
+console.log(`anime-sdk example server listening on http://localhost:${port}`);

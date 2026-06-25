@@ -1,27 +1,33 @@
 ---
-const proxyEnableCode = `<code><span class="fn">startServer</span><span class="pun">({</span>
-  providers<span class="pun">:</span> <span class="pun">[</span><span class="kw">new</span> <span class="fn">GogoanimeProvider</span><span class="pun">(</span><span class="kw">new</span> <span class="fn">HttpClient</span><span class="pun">())],</span>
-  port<span class="pun">:</span> <span class="num">3000</span><span class="pun">,</span>
-  proxy<span class="pun">:</span> <span class="kw">true</span><span class="pun">,</span>  <span class="cm">// ← that's it</span>
+const proxyEnableCode = `<code><span class="cm">// enable /proxy + automatic URL rewriting</span>
+<span class="kw">import</span> <span class="pun">{</span> <span class="typ">startServer</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
+<span class="fn">startServer</span><span class="pun">({</span>
+  port<span class="pun">:</span> <span class="num">3030</span><span class="pun">,</span>
+  proxy<span class="pun">:</span> <span class="pun">{</span>
+    signSecret<span class="pun">:</span> process<span class="pun">.</span>env<span class="pun">.</span><span class="prop">PROXY_SIGN_SECRET</span><span class="pun">,</span>
+  <span class="pun">},</span>
 <span class="pun">});</span></code>`;
 
 const proxyRewriteCode = `<code><span class="cm">// without proxy</span>
 <span class="pun">{</span>
-  sourceUrl<span class="pun">:</span> <span class="str">"https://cdn.example.com/ep1.m3u8"</span><span class="pun">,</span>
-  headers<span class="pun">:</span> <span class="pun">{</span> <span class="prop">Referer</span><span class="pun">:</span> <span class="str">"https://provider.com/watch/..."</span> <span class="pun">}</span>
+  url<span class="pun">:</span> <span class="str">"https://cdn.example.com/ep1.m3u8"</span><span class="pun">,</span>
+  headers<span class="pun">:</span> <span class="pun">{</span> <span class="prop">Referer</span><span class="pun">:</span> <span class="str">"https://provider.com"</span> <span class="pun">},</span>
+  origin<span class="pun">:</span> <span class="pun">{</span> host<span class="pun">:</span> <span class="str">"cdn.example.com"</span><span class="pun">,</span> proxied<span class="pun">:</span> <span class="kw">false</span> <span class="pun">}</span>
 <span class="pun">}</span>
 
 <span class="cm">// with proxy</span>
 <span class="pun">{</span>
-  sourceUrl<span class="pun">:</span> <span class="str">"http://localhost:3000/proxy?url=...&amp;h=..."</span>
+  url<span class="pun">:</span> <span class="str">"http://localhost:3030/proxy?url=...&amp;sig=..."</span><span class="pun">,</span>
+  origin<span class="pun">:</span> <span class="pun">{</span> host<span class="pun">:</span> <span class="str">"cdn.example.com"</span><span class="pun">,</span> proxied<span class="pun">:</span> <span class="kw">true</span> <span class="pun">}</span>
 <span class="pun">}</span></code>`;
 
-const proxyPlayerCode = `<code><span class="cm">// just pass sourceUrl straight to hls.js</span>
+const proxyPlayerCode = `<code><span class="cm">// just pass stream.url straight to hls.js</span>
 <span class="kw">const</span> hls <span class="pun">=</span> <span class="kw">new</span> <span class="fn">Hls</span><span class="pun">();</span>
-hls<span class="pun">.</span><span class="fn">loadSource</span><span class="pun">(</span>sourceUrl<span class="pun">);</span>
+hls<span class="pun">.</span><span class="fn">loadSource</span><span class="pun">(</span>stream<span class="pun">.</span>url<span class="pun">);</span>
 hls<span class="pun">.</span><span class="fn">attachMedia</span><span class="pun">(</span>videoEl<span class="pun">);</span>
 
-<span class="cm">// no xhrSetup. no custom headers.</span>
+<span class="cm">// stream.origin.host shows the real CDN hostname</span>
+<span class="cm">// no xhrSetup. no custom headers needed.</span>
 <span class="cm">// segment + key URLs rewrite automatically.</span></code>`;
 ---
 
@@ -34,11 +40,11 @@ hls<span class="pun">.</span><span class="fn">attachMedia</span><span class="pun
       <p class="text-[14px]" style="color: var(--muted);">
         Most stream CDNs require a <code class="font-mono text-[12px]" style="color: var(--accent);"
           >Referer</code
-        > header browsers can't send freely. Set <code
+        > header browsers can't send freely. Enable the proxy and every URL in the response becomes a
+        plain proxied URL your player can use directly. <code
           class="font-mono text-[12px]"
-          style="color: var(--accent);">proxy: true</code
-        > and every URL in the response becomes a plain proxied URL your player can use directly. No header
-        wrangling.
+          style="color: var(--accent);">stream.origin.host</code
+        > always tells you where it really came from.
       </p>
     </div>
   </div>
@@ -52,9 +58,9 @@ hls<span class="pun">.</span><span class="fn">attachMedia</span><span class="pun
       <pre class="font-mono text-[12px] leading-[1.85] text-zinc-300" set:html={proxyEnableCode} />
       <p class="mt-4 text-[11.5px] leading-relaxed" style="color: var(--muted);">
         A <code class="font-mono" style="color: var(--accent);">/proxy</code> endpoint becomes active
-        and every <code class="font-mono" style="color: var(--accent);">sourceUrl</code> in <code
+        and every <code class="font-mono" style="color: var(--accent);">url</code> in <code
           class="font-mono"
-          style="color: var(--accent);">/stream</code
+          style="color: var(--accent);">/episode/:id/stream</code
         > responses is rewritten to go through it.
       </p>
     </div>
@@ -65,10 +71,13 @@ hls<span class="pun">.</span><span class="fn">attachMedia</span><span class="pun
       </div>
       <pre class="font-mono text-[12px] leading-[1.85] text-zinc-300" set:html={proxyRewriteCode} />
       <p class="mt-4 text-[11.5px] leading-relaxed" style="color: var(--muted);">
-        Required headers are base64-encoded into the URL. Your frontend uses <code
+        Required headers are signed into the URL. Your frontend uses <code
           class="font-mono"
-          style="color: var(--accent);">sourceUrl</code
-        > as-is. No header forwarding needed.
+          style="color: var(--accent);">stream.url</code
+        > as-is. The origin is always accessible in <code
+          class="font-mono"
+          style="color: var(--accent);">stream.origin.host</code
+        >.
       </p>
     </div>
 

@@ -1,19 +1,17 @@
 /**
- * E2E integration tests for GoyabuProvider.
- *
- * To run: npx vitest run tests/e2e/goyabu.test.ts
+ * E2E integration tests for GoyabuSource.
  */
 import { describe, it, expect } from 'vitest';
-import { HttpClient } from '../../src/transport/http.js';
-import { GoyabuProvider } from '../../src/providers/GoyabuProvider.js';
-import { captureStreamScreenshot } from './screenshotHelper.js';
+import { HttpClient } from '../../src/internal/http.js';
+import { GoyabuSource } from '../../src/sources/goyabu.js';
+import { decodeId } from '../../src/internal/id.js';
+import { captureStreamScreenshot, streamToPayload } from './screenshotHelper.js';
 
 describe('Goyabu E2E', () => {
   it('searches, fetches episodes, resolves a stream, and captures a screenshot', async () => {
     const http = new HttpClient({ timeoutMs: 25000 });
-    const provider = new GoyabuProvider(http);
+    const source = new GoyabuSource(http);
 
-    // Confirm the site is even up before exercising the scraper.
     const ping = await fetch('https://goyabu.io', {
       method: 'HEAD',
       headers: {
@@ -24,29 +22,25 @@ describe('Goyabu E2E', () => {
     });
     expect(ping.status, 'goyabu.io must be reachable').toBeLessThan(500);
 
-    const query = 'Naruto';
-    const searchResults = await provider.search(query);
-    expect(searchResults.length).toBeGreaterThan(0);
+    const results = await source.search('Naruto', 'anime', {});
+    expect(results.length).toBeGreaterThan(0);
 
-    const target = searchResults[0];
-    expect(target.providerId).toBe('goyabu');
-    console.log(`Goyabu selected: ${target.title} (${target.id})`);
+    const target = results[0];
+    const decoded = decodeId(target.id);
+    expect(decoded.s).toBe('goyabu');
+    console.log(`Goyabu selected: ${target.title.preferred} (${decoded.r})`);
 
-    const units = await provider.fetchContentUnits(target.id);
-    expect(units.length).toBeGreaterThan(0);
+    const list = await source.episodes(decoded.r, {});
+    expect(list.items.length).toBeGreaterThan(0);
 
-    const ep1 = units[0];
-    const stream = await provider.resolveStream(ep1.id);
-    expect(stream.type).toBe('video');
-    if (stream.type !== 'video') return;
-    expect(stream.streams.length).toBeGreaterThan(0);
+    const streams = await source.stream(list.items[0].id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    const stream = streams[0];
+    expect(stream.url).toBeTruthy();
+    expect(stream.source).toBe('goyabu');
+    console.log(`Goyabu stream: ${stream.url.slice(0, 80)} (${stream.language})`);
 
-    console.log(
-      `Goyabu resolved ${stream.streams.length} stream candidate(s); ` +
-        `top: ${stream.streams[0].sourceUrl.slice(0, 80)}`,
-    );
-
-    const result = await captureStreamScreenshot('goyabu', stream.streams);
+    const result = await captureStreamScreenshot('goyabu', streamToPayload(stream));
     expect(result.outputPath).toMatch(/screenshot_goyabu\.png$/);
   }, 90000);
 });

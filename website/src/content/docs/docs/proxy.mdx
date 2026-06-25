@@ -3,211 +3,66 @@ title: Stream Proxy
 description: Route video streams through the SDK server so browsers can play them without CORS or header restrictions.
 ---
 
-import { Aside } from '@astrojs/starlight/components';
-
-Most streaming servers block cross-origin requests and require custom `Referer` or `User-Agent` headers. Browsers can't set these freely, so direct playback from a web app fails. The built-in proxy solves this by fetching video data server-side and forwarding it to the browser with full CORS headers.
+Most streaming CDNs block cross-origin requests and require a specific `Referer` or `User-Agent`. Browsers can't set those headers freely, so direct playback from a web app fails. The built-in proxy fetches video data server-side and re-emits it with full CORS headers.
 
 ## Enabling the proxy
 
-Pass `proxy: true` to `startServer`:
+Pass `proxy` to `startServer`:
 
 ```ts
-import { HttpClient, GogoanimeProvider, startServer } from 'anime-sdk';
+import { startServer } from 'anime-sdk';
 
 startServer({
-  providers: [new GogoanimeProvider(new HttpClient())],
-  port: 3000,
-  proxy: true,
+  port: 3030,
+  proxy: {
+    signSecret: process.env.PROXY_SIGN_SECRET, // HMAC-sign upstream URLs (recommended in prod)
+    allowedHosts: ['cdn.example.com'], // SSRF allowlist (optional but recommended)
+  },
 });
 ```
 
-That's it. Three things happen automatically:
+Or via the CLI — any `PROXY_*` env var turns it on:
 
-1. A `/proxy` endpoint becomes active.
-2. Every `sourceUrl` in anime `/stream` responses (and `/meta/stream`) and every URL in `imageUrls` for manga `/stream` responses is rewritten to go through `/proxy`, with the required headers encoded in the URL. Your frontend uses these URLs as-is: no header forwarding needed.
-3. Every subtitle `url` returned in `/stream`, `/tracks`, `/meta/stream`, or `/meta/tracks` responses is rewritten through `/proxy` too, with a `ct=text/vtt` hint so the proxy forces the right `Content-Type` even when the upstream CDN serves `application/octet-stream`.
+```sh
+PROXY_SIGN_SECRET=$(openssl rand -hex 32) npx anime-sdk
+```
 
-## proxyBase resolution
+When enabled, three things happen:
 
-By default the proxy URL is derived per-request from the incoming
-`Host` header (and `X-Forwarded-Proto` when present), so the SDK works
-behind reverse proxies and on cloud hosts without configuration.
+1. A `GET /proxy?url=…` endpoint is exposed.
+2. Every `stream.url` and `subtitles[i].url` in `/episode/:id/stream` responses is rewritten through `/proxy` with the required headers encoded in the URL.
+3. Every `pages[i].url` in `/chapter/:id/pages` responses is rewritten too.
 
-Set `proxyBase` explicitly when the public URL differs from what `Host`
-reports (e.g. `https://api.example.com` reverse-proxied to internal
-`:3000`):
+Your frontend uses `stream.url` as-is — no extra headers needed.
+
+## URL shape
+
+```text
+http://localhost:3030/proxy
+  ?url=<encoded upstream URL>
+  &h=<base64 JSON of headers to attach>
+  &sig=<HMAC-SHA256 hex when signSecret is set>
+  &ct=<content-type override, optional>
+```
+
+HLS manifests served through `/proxy` are parsed inline; every variant playlist, key, and segment URI is rewritten so that the entire manifest chain stays proxied.
+
+## SSRF defence
+
+`allowedHosts` is a suffix-matched allowlist. An entry like `wixstatic.com` covers `static.wixstatic.com` and any other subdomain. With no allowlist, `/proxy` will fetch any hostname — fine for local development, dangerous on a public deployment.
+
+## Signed URLs
+
+Set `signSecret` and the server signs every URL it emits with HMAC-SHA256 over the target URL (plus the `h` payload when present). Requests without a valid `sig` get a 401. Use this on anything reachable from the public internet.
+
+## Behind a reverse proxy
+
+When the public URL differs from what Node sees (e.g. `https://api.example.com` reverse-proxied to `127.0.0.1:3030`), pass `proxy.base`:
 
 ```ts
 startServer({
-  providers: [
-    /* … */
-  ],
-  proxy: true,
-  proxyBase: 'https://api.example.com/proxy',
+  proxy: { base: 'https://api.example.com', signSecret: process.env.PROXY_SIGN_SECRET },
 });
 ```
 
-## HMAC-signed URLs
-
-Setting `proxySignSecret` makes `/proxy` require an HMAC-SHA256 `sig`
-query parameter on every request. The signature is computed over `url`
-plus the optional `|h=<h>` payload, keyed by the secret, hex-encoded.
-The server signs the URLs it emits automatically, so most callers don't
-need to do anything beyond setting the option.
-
-```ts
-startServer({
-  providers: [
-    /* … */
-  ],
-  proxy: true,
-  proxySignSecret: process.env.PROXY_SECRET,
-});
-```
-
-Unsigned or invalid-signature requests return **401**. Use this in any
-deployment where the proxy is reachable from the public internet —
-without it, an attacker can use your server as a generic HTTP relay.
-
-If a caller needs to sign a URL out-of-band:
-
-```ts
-import * as crypto from 'node:crypto';
-const sig = crypto.createHmac('sha256', secret).update(targetUrl).digest('hex');
-const url = `${proxyBase}?url=${encodeURIComponent(targetUrl)}&sig=${sig}`;
-```
-
-## SSRF allowlist
-
-`proxyAllowedHosts: string[]` restricts `/proxy` to a suffix-matched
-list of upstream hostnames. Each entry covers all subdomains:
-
-```ts
-startServer({
-  providers: [
-    /* … */
-  ],
-  proxy: true,
-  proxyAllowedHosts: ['wixstatic.com', 'allanime.day', 'mp4upload.com', 'uploads.mangadex.org'],
-});
-```
-
-Targets outside the list return **403**. When unset, all hosts are
-allowed — fine for local development; combine with `proxySignSecret`
-in production.
-
-## How stream URLs are rewritten
-
-**Without proxy (`proxy: false`, default):**
-
-```json
-{
-  "sourceUrl": "https://cdn.example.com/episode1.m3u8",
-  "isHLS": true,
-  "headers": { "Referer": "https://provider.com/watch/episode-1" }
-}
-```
-
-**With proxy (`proxy: true`):**
-
-```json
-{
-  "sourceUrl": "http://localhost:3000/proxy?url=https%3A%2F%2Fcdn.example.com%2Fepisode1.m3u8&h=eyJSZWZlcmVyIjoiaHR0cHM6Ly9wcm92aWRlci5jb20vd2F0Y2gvZXBpc29kZS0xIn0%3D",
-  "isHLS": true,
-  "headers": { "Referer": "https://provider.com/watch/episode-1" }
-}
-```
-
-The `h` param is the base64-encoded JSON of the original headers object. The proxy decodes it and includes those headers in the upstream request.
-
-## The `/proxy` endpoint
-
-```
-GET /proxy?url=<encoded-url>[&h=<base64-headers>][&ct=<content-type>][&sig=<hmac-sha256>]
-```
-
-| Param | Required                             | Description                                                             |
-| ----- | ------------------------------------ | ----------------------------------------------------------------------- | ---------------------------------------- |
-| `url` | ✓                                    | URL-encoded target URL to fetch                                         |
-| `h`   |                                      | Base64-encoded JSON of request headers to forward upstream              |
-| `ct`  |                                      | Override the response `Content-Type` (used for `text/vtt` on subtitles) |
-| `sig` | when `proxySignSecret` is configured | HMAC-SHA256 of `url` plus optional `                                    | h=<h>`, keyed by the secret, hex-encoded |
-
-The response includes `Access-Control-Allow-Origin: *` and passes through the upstream body. The `Content-Type` is the upstream value unless `ct` is set (or the proxy detects an HLS manifest, in which case it serves `application/vnd.apple.mpegurl`).
-
-### HLS manifest rewriting
-
-When the upstream response is an HLS manifest (`.m3u8` or `Content-Type: application/vnd.apple.mpegurl`), the proxy rewrites every URI in it: segment URLs, sub-playlist URLs, `#EXT-X-KEY` encryption key URLs, `#EXT-X-MAP` initialization URIs: to also go through `/proxy`. The `h` param is preserved on every rewritten URI, so the full header chain propagates automatically.
-
-This means an HLS player (e.g. [hls.js](https://github.com/video-dev/hls.js)) only needs to load the proxy URL for the master playlist. All subsequent requests are handled transparently.
-
-### Subtitle proxying
-
-Subtitle URLs returned in `IVideoPayload.subtitles` and `IUnitTracks.subtitles` are rewritten the same way, with `ct=text/vtt` appended for VTT tracks. That ensures the browser parses the response as WebVTT even when the upstream CDN claims `application/octet-stream` (common with anizara/megastatics/etc.). Hand the rewritten URL straight to a `<track>` element: no `crossorigin` shenanigans needed beyond setting `crossOrigin="anonymous"` on the `<video>`:
-
-```tsx
-<video crossOrigin="anonymous" controls>
-  {stream.subtitles?.map((t) => (
-    <track key={t.url} kind="subtitles" src={t.url} srcLang={t.language} label={t.label} />
-  ))}
-</video>
-```
-
-If you're constructing subtitle URLs by hand outside of `startServer`, the SDK exports `proxifySubtitleUrl(proxyBase, track, opts?)` that does this encoding for you — pass `signSecret` in `opts` when the server is configured with `proxySignSecret`.
-
-## Playing streams in the browser
-
-With proxy enabled, `sourceUrl` is a plain URL the browser can fetch without any extra configuration:
-
-```tsx
-import Hls from 'hls.js';
-
-function Player({ sourceUrl, isHLS }: { sourceUrl: string; isHLS: boolean }) {
-  const ref = useRef<HTMLVideoElement>(null);
-
-  useEffect(() => {
-    const v = ref.current!;
-    if (isHLS && Hls.isSupported()) {
-      const hls = new Hls();
-      hls.loadSource(sourceUrl); // proxy URL: just works
-      hls.attachMedia(v);
-      return () => hls.destroy();
-    }
-    v.src = sourceUrl;
-  }, [sourceUrl, isHLS]);
-
-  return <video ref={ref} controls />;
-}
-```
-
-No `xhrSetup`, no custom headers, no CORS workarounds.
-
-## Response headers
-
-All `/proxy` responses include:
-
-```
-Access-Control-Allow-Origin: *
-Access-Control-Allow-Methods: GET, OPTIONS
-Access-Control-Allow-Headers: *
-```
-
-All other API routes (`/search`, `/content`, `/stream`, `/tracks`) also include these headers, so you can call the server directly from any browser origin without a reverse proxy in front.
-
-<Aside type="caution">
-  The proxy will forward any URL with any headers to the upstream server. It is intended for local
-  development and trusted environments: do not expose it to the public internet without adding
-  authentication via the `auth` option.
-</Aside>
-
-## Fetching the proxy URL manually
-
-If you're building a custom client you can construct proxy URLs yourself:
-
-```ts
-const headers = { Referer: 'https://provider.com/watch/episode-1' };
-const h = btoa(JSON.stringify(headers));
-const proxyUrl = `http://localhost:3000/proxy?url=${encodeURIComponent(streamUrl)}&h=${encodeURIComponent(h)}`;
-```
-
-Or use the server's rewritten `sourceUrl` directly: it already has everything encoded.
+The server otherwise derives the base from each request's `Host` header.

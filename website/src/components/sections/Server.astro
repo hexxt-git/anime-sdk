@@ -1,34 +1,29 @@
 ---
-const serverStartCode = `<code><span class="kw">import</span> <span class="pun">{</span> <span class="typ">startServer</span><span class="pun">,</span> <span class="typ">AllmangaProvider</span><span class="pun">,</span> <span class="typ">HttpClient</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
+const serverStartCode = `<code><span class="cm"># zero-install server — all 12 sources</span>
+<span class="cm">$</span> npx anime-sdk
 
-<span class="kw">const</span> store <span class="pun">=</span> <span class="kw">new</span> <span class="fn">Map</span><span class="pun">();</span>
+<span class="cm">// or programmatically:</span>
+<span class="kw">import</span> <span class="pun">{</span> <span class="typ">startServer</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
+<span class="fn">startServer</span><span class="pun">({</span> port<span class="pun">:</span> <span class="num">3030</span> <span class="pun">});</span>
 
-<span class="fn">startServer</span><span class="pun">({</span>
-  providers<span class="pun">:</span> <span class="pun">[</span><span class="kw">new</span> <span class="fn">AllmangaProvider</span><span class="pun">(</span><span class="kw">new</span> <span class="fn">HttpClient</span><span class="pun">())],</span>
-  port<span class="pun">:</span> <span class="num">3000</span><span class="pun">,</span>
-  proxy<span class="pun">:</span> <span class="kw">true</span><span class="pun">,</span>
-  cache<span class="pun">:</span> <span class="pun">{</span> get<span class="pun">:</span> <span class="pun">(</span>k<span class="pun">)</span> =&gt; store<span class="pun">.</span><span class="fn">get</span><span class="pun">(</span>k<span class="pun">),</span> set<span class="pun">:</span> <span class="pun">(</span>k<span class="pun">,</span> v<span class="pun">)</span> =&gt; store<span class="pun">.</span><span class="fn">set</span><span class="pun">(</span>k<span class="pun">,</span> v<span class="pun">)</span> <span class="pun">},</span>
-<span class="pun">});</span>
+<span class="cm">// → http://localhost:3030</span></code>`;
 
-<span class="cm">// → http://localhost:3000</span></code>`;
+const serverCurlCode = `<code><span class="cm"># search anime or manga</span>
+curl <span class="str">'localhost:3030/search?q=Frieren&amp;kind=anime'</span>
 
-const serverCurlCode = `<code><span class="cm"># search shows or manga</span>
-curl <span class="str">'localhost:3000/search?q=Frieren&amp;provider=mangadex'</span>
+<span class="cm"># episodes or chapters</span>
+curl <span class="str">'localhost:3030/media/:id/episodes'</span>
 
-<span class="cm"># content: episodes or chapters</span>
-curl <span class="str">'localhost:3000/content?mediaId=...&amp;provider=mangadex'</span>
+<span class="cm"># resolve stream</span>
+curl <span class="str">'localhost:3030/episode/:id/stream?language=sub'</span></code>`;
 
-<span class="cm"># resolve: streams or image pages</span>
-curl <span class="str">'localhost:3000/stream?unitId=...&amp;provider=mangadex'</span></code>`;
+const serverAuthCode = `<code><span class="cm">$</span> PORT<span class="pun">=</span><span class="num">8080</span> \\
+  SOURCES_DISABLED<span class="pun">=</span>goyabu \\
+  npx anime-sdk
 
-const serverAuthCode = `<code><span class="fn">startServer</span><span class="pun">({</span>
-  providers<span class="pun">:</span> <span class="pun">[</span><span class="kw">new</span> <span class="fn">AllmangaProvider</span><span class="pun">(</span><span class="kw">new</span> <span class="fn">HttpClient</span><span class="pun">())],</span>
-  port<span class="pun">:</span> <span class="num">3000</span><span class="pun">,</span>
-  auth<span class="pun">:</span> <span class="pun">{</span> token<span class="pun">:</span> process<span class="pun">.</span>env<span class="pun">.</span><span class="prop">API_TOKEN</span> <span class="pun">},</span>
-<span class="pun">});</span>
-
-<span class="cm">// Clients send:</span>
-<span class="cm">// Authorization: Bearer &lt;token&gt;</span></code>`;
+<span class="cm">// or with a custom SDK instance:</span>
+<span class="kw">import</span> <span class="pun">{</span> <span class="typ">createSdk</span><span class="pun">,</span> <span class="typ">startServer</span> <span class="pun">}</span> <span class="kw">from</span> <span class="str">'anime-sdk'</span><span class="pun">;</span>
+<span class="fn">startServer</span><span class="pun">({</span> sdk<span class="pun">:</span> <span class="fn">createSdk</span><span class="pun">({</span> sources<span class="pun">:</span> <span class="pun">[</span><span class="str">'anilist'</span><span class="pun">]</span> <span class="pun">})});</span></code>`;
 ---
 
 <section id="server">
@@ -38,9 +33,8 @@ const serverAuthCode = `<code><span class="fn">startServer</span><span class="pu
         <h2 class="text-[28px] font-bold tracking-tight">Skip the API boilerplate.</h2>
       </div>
       <p class="text-[14px]" style="color: var(--muted);">
-        anime-sdk ships with a ready-to-run HTTP server. Routes for search, episodes, streams, and
-        track metadata; an optional stream + subtitle proxy; bring-your-own cache with a two-method
-        get/set interface; bearer-token auth. Point any client at it, ship.
+        anime-sdk ships with a zero-config HTTP server. One command or one line of code. Routes for
+        search, episodes, streams, manga pages, and browse. Point any client at it, ship.
       </p>
     </div>
   </div>
@@ -49,7 +43,7 @@ const serverAuthCode = `<code><span class="fn">startServer</span><span class="pu
     <div class="cell no-bottom show-dots px-8 py-8">
       <div class="mb-5 flex items-center gap-3">
         <span class="badge badge-ok">Start it</span>
-        <span class="font-mono text-[11px]" style="color: var(--muted);">server.ts</span>
+        <span class="font-mono text-[11px]" style="color: var(--muted);">terminal / server.ts</span>
       </div>
       <pre class="font-mono text-[12px] leading-[1.85] text-zinc-300" set:html={serverStartCode} />
     </div>
@@ -67,12 +61,12 @@ const serverAuthCode = `<code><span class="fn">startServer</span><span class="pu
 
     <div class="cell no-right no-bottom show-dots px-8 py-8">
       <div class="mb-5 flex items-center gap-3">
-        <span class="badge badge-muted">Lock it down</span>
+        <span class="badge badge-muted">Configure</span>
         <span class="font-mono text-[11px]" style="color: var(--muted);">optional</span>
       </div>
       <pre class="font-mono text-[12px] leading-[1.85] text-zinc-300" set:html={serverAuthCode} />
       <p class="mt-4 text-[11.5px] leading-relaxed" style="color: var(--muted);">
-        Skip auth entirely if it's local. The SDK works standalone too. No server required.
+        Skip the server entirely and call the SDK directly. No HTTP required.
       </p>
     </div>
   </div>

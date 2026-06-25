@@ -1,30 +1,29 @@
 ---
-title: WeebCentral
-description: How to use the WeebcentralProvider in anime-sdk.
+title: weebcentral
+description: Manga source for weebcentral.com — HTML scraping for chapters and pages.
 ---
 
-The `WeebcentralProvider` scrapes `weebcentral.com`. It provides a wide range of manga titles and high-quality image pages.
+`WeebcentralSource` scrapes `weebcentral.com`. Good alternative for manga not on MangaDex or Mangapill.
+
+## Capabilities
+
+- `search`, `chapters`, `pages`
 
 ## Usage
 
 ```ts
-import { HttpClient, WeebcentralProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const provider = new WeebcentralProvider(http);
+const sdk = createSdk({ sources: ['weebcentral'] });
 
-const results = await provider.search('Frieren');
-const chapters = await provider.fetchContentUnits(results[0].id);
-const pages = await provider.resolveStream(chapters[0].id);
+const results = await sdk.search('Frieren', { kind: 'manga' });
+const { items: chapters } = await sdk.chapters(results[0]);
+const pages = await sdk.pages(chapters[0]);
 ```
 
-## Characteristics
+## Notes
 
-| Feature        | Details          |
-| -------------- | ---------------- |
-| **Catalog**    | Manga            |
-| **Languages**  | `sub`            |
-| **Method**     | HTML scraping    |
-| **Protection** | Referer required |
-
-WeebCentral is a reliable fallback when MangaDex is missing a specific title or translation. It requires proper referer headers, which are handled automatically by the provider and the SDK's built-in proxy.
+- Uses `/search/data?text=...` endpoint which returns HTML fragments.
+- Chapter list from `{seriesId}/full-chapter-list` — returns all chapters in one request.
+- Pages from `chapters/{chapterId}/images?reading_style=long_strip`.
+- Requires `Referer: https://google.com` and `User-Agent` headers to avoid bot protection.

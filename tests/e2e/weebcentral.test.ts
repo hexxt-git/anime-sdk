@@ -1,46 +1,38 @@
 import { describe, it, expect } from 'vitest';
-import { HttpClient } from '../../src/transport/http.js';
-import { DomRegistry } from '../../src/transport/dom.js';
-import { WeebcentralProvider } from '../../src/providers/WeebcentralProvider.js';
+import { HttpClient } from '../../src/internal/http.js';
+import { WeebcentralSource } from '../../src/sources/weebcentral.js';
+import { decodeId } from '../../src/internal/id.js';
 
 describe('Weebcentral E2E', () => {
-  it('searches, fetches chapters, and resolves a stream with accessible images', async () => {
-    const http = new HttpClient({
-      timeoutMs: 25000,
-      defaultHeaders: {
+  it('searches, fetches chapters, and resolves pages with accessible images', async () => {
+    const http = new HttpClient({ timeoutMs: 25000 });
+    const source = new WeebcentralSource(http);
+
+    const results = await source.search('Frieren', 'manga', {});
+    expect(results.length).toBeGreaterThan(0);
+
+    const target = results[0];
+    const decoded = decodeId(target.id);
+    expect(decoded.s).toBe('weebcentral');
+    console.log(`Weebcentral selected: ${target.title.preferred} (${decoded.r})`);
+
+    const list = await source.chapters(decoded.r, {});
+    expect(list.items.length).toBeGreaterThan(0);
+
+    const pages = await source.pages(list.items[0].id, {});
+    expect(pages.pages.length).toBeGreaterThan(0);
+
+    const imgUrl = pages.pages[0].url;
+    const imgRes = await http.get(imgUrl, {
+      headers: {
+        Referer: 'https://google.com',
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
     });
-    const provider = new WeebcentralProvider(http);
-
-    const query = 'Frieren';
-    const searchResults = await provider.search(query);
-    expect(searchResults.length).toBeGreaterThan(0);
-
-    const target = searchResults[0];
-    expect(target.providerId).toBe('weebcentral');
-    console.log(`Weebcentral selected: ${target.title} (${target.id})`);
-
-    const units = await provider.fetchContentUnits(target.id);
-    expect(units.length).toBeGreaterThan(0);
-
-    const ep1 = units[0];
-    const stream = await provider.resolveStream(ep1.id);
-    expect(stream.type).toBe('manga');
-    if (stream.type !== 'manga') return;
-
-    expect(stream.pages.imageUrls.length).toBeGreaterThan(0);
-
-    // Verify image accessibility
-    const imgUrl = stream.pages.imageUrls[0];
-    const imgRes = await http.get(imgUrl, { headers: stream.pages.headers });
     expect(imgRes.status).toBe(200);
-    const contentType = imgRes.headers.get('content-type');
-    expect(contentType).toMatch(/^image\//);
+    expect(imgRes.headers.get('content-type')).toMatch(/^image\//);
 
-    console.log(
-      `Weebcentral resolved ${stream.pages.imageUrls.length} pages; top: ${imgUrl.slice(0, 80)} (${contentType})`,
-    );
+    console.log(`Weebcentral resolved ${pages.pages.length} pages; top: ${imgUrl.slice(0, 80)}`);
   }, 90000);
 });

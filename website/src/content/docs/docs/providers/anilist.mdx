@@ -1,58 +1,41 @@
 ---
-title: AniList
-description: How to use the AnilistMeta metadata provider in anime-sdk.
+title: anilist
+description: AniList GraphQL catalogue source — search, info, browse.
 ---
 
-`AnilistMeta` hits the public `graphql.anilist.co` endpoint to fetch rich
-catalogue metadata for anime and manga: titles, descriptions, covers,
-relations (sequel/prequel), characters with voice actors, staff,
-recommendations, external streaming links, and per-episode
-`streamingEpisodes` (title + thumbnail). It implements browse for
-trending, popular, seasonal, and top — paginated.
+`AnilistSource` queries `graphql.anilist.co` and returns `Media` records with full metadata. Enabled by default as the primary catalogue source.
 
-No API key required.
+## Capabilities
+
+- `search(query, kind)` — full-text search across anime and manga
+- `info(id)` — full `Media` record for a single title
+- `browse({ list, kind })` — trending, popular, seasonal, top
 
 ## Usage
 
 ```ts
-import { HttpClient, AnilistMeta, AllmangaProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const http = new HttpClient();
-const meta = new AnilistMeta(http);
+const sdk = createSdk({ sources: ['anilist'] });
 
-// Pull full metadata for AniList ID 1 (Cowboy Bebop).
-const info = await meta.fetchMediaInfo('anilist:1');
-console.log(info.title.english, info.episodeCount, info.score);
+const results = await sdk.search('Frieren', { kind: 'anime' });
+// results[0].mappings.anilist → 154587
 
-// Use the same URN to resolve a stream on any content provider.
-const allmanga = new AllmangaProvider(http);
-const stream = await meta.resolveStream('anilist:1', 1, allmanga, 'sub');
+const trending = await sdk.browse({ list: 'trending', kind: 'anime' });
+const seasonal = await sdk.browse({ list: 'seasonal', kind: 'anime', season: 'FALL', year: 2024 });
 ```
 
-## URN shape
+## Browse lists
 
-```
-anilist:21          # numeric AniList ID, single global namespace
-```
+| List     | Notes                              |
+| -------- | ---------------------------------- |
+| trending | Currently trending on AniList      |
+| popular  | All-time popularity ranking        |
+| seasonal | Titles airing in `season` + `year` |
+| top      | Highest-scored titles              |
 
-`AnilistMeta` always emits and accepts this URN form.
+## Notes
 
-## Browse
-
-```ts
-await meta.browse('trending', { catalogType: 'ANIME', perPage: 10 });
-await meta.browse('seasonal', { season: 'FALL', year: 2024 });
-await meta.browse('top');
-await meta.browse('popular');
-```
-
-## Characteristics
-
-| Feature                   | Details                                                                                             |
-| ------------------------- | --------------------------------------------------------------------------------------------------- |
-| **Catalogues**            | Anime + Manga                                                                                       |
-| **Native ID shape**       | `anilist:<integer>`                                                                                 |
-| **Endpoint**              | `graphql.anilist.co` (free, keyless)                                                                |
-| **Rate limit (built-in)** | 85 req/min (matches AniList's 90/min cap, with headroom)                                            |
-| **Enrichments**           | relations, characters (+ voice actors), staff, recommendations, external links, `streamingEpisodes` |
-| **Browse**                | `trending`, `popular`, `seasonal`, `top`                                                            |
+- No API key required. Public rate limit: ~90 req/min per IP.
+- `media.score` is returned as `{ value, scale: 100 }` — divide by 10 to get the 0–10 rating.
+- `media.mappings.mal` is populated from AniList's `idMal` field.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { DomRegistry, BrowserDomParser } from '../src/transport/dom.js';
+import { DomRegistry, BrowserDomParser } from '../src/internal/dom.js';
 import { IDomParser, IDomElement } from '../src/types/index.js';
 
 class MockElement implements IDomElement {
@@ -34,9 +34,11 @@ class MockParser implements IDomParser {
 
 describe('DOM Registry and Parsers', () => {
   it('auto-registers linkedom so BrowserDomParser works in Node without manual setup', () => {
-    // linkedom is now a direct dependency and dom.ts registers it automatically
+    // linkedom is now a direct dependency and dom.ts registers it automatically.
+    // Parse with a wrapper so the target element is a descendant (querySelector
+    // searches children, not the root itself).
     const parser = new BrowserDomParser();
-    const root = parser.parse('<div id="test">hello</div>');
+    const root = parser.parse('<div><span id="test">hello</span></div>');
     expect(root.querySelector('#test')?.textContent).toBe('hello');
   });
 

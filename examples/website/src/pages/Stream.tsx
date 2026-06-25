@@ -1,193 +1,48 @@
-import { useEffect, useRef, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import Hls from 'hls.js';
 import * as api from '../api';
-
-// ─── Download button with SSE progress ────────────────────────────────────────
-
-type DownloadPhase = 'idle' | 'active' | 'done' | 'error';
-
-function DownloadButton({
-  provider,
-  unitId,
-  language,
-  type,
-}: {
-  provider: string;
-  unitId: string;
-  language: string;
-  type: 'video' | 'manga';
-}) {
-  const [phase, setPhase] = useState<DownloadPhase>('idle');
-  const [label, setLabel] = useState('');
-  const esRef = useRef<EventSource | null>(null);
-
-  const stop = () => {
-    esRef.current?.close();
-    esRef.current = null;
-  };
-
-  useEffect(() => stop, []);
-
-  const start = () => {
-    if (phase === 'active') {
-      stop();
-      setPhase('idle');
-      return;
-    }
-
-    const progressPath =
-      type === 'video'
-        ? `/download/video/progress?provider=${provider}&unitId=${encodeURIComponent(unitId)}&language=${language}`
-        : `/download/manga/chapter/progress?provider=${provider}&unitId=${encodeURIComponent(unitId)}`;
-    const filePath = type === 'video' ? '/download/video/file' : '/download/manga/chapter/file';
-
-    setPhase('active');
-    setLabel('connecting…');
-
-    const es = new EventSource(`${api.API}${progressPath}`);
-    esRef.current = es;
-
-    es.onmessage = (e) => {
-      const data = JSON.parse(e.data) as Record<string, unknown>;
-      if (data.type === 'progress') {
-        if (type === 'manga') {
-          setLabel(`${data.downloaded}/${data.total} pages`);
-        } else {
-          const detail = data.detail as string | undefined;
-          setLabel(detail ?? (data.phase as string));
-        }
-      } else if (data.type === 'complete') {
-        stop();
-        setPhase('done');
-        setLabel('');
-        const a = document.createElement('a');
-        a.href = `${api.API}${filePath}?token=${data.token}`;
-        a.click();
-        setTimeout(() => setPhase('idle'), 3000);
-      } else if (data.type === 'error') {
-        stop();
-        setPhase('error');
-        setLabel((data.message as string | undefined) ?? 'failed');
-        setTimeout(() => setPhase('idle'), 4000);
-      }
-    };
-
-    es.onerror = () => {
-      stop();
-      setPhase('error');
-      setLabel('connection failed');
-      setTimeout(() => setPhase('idle'), 3000);
-    };
-  };
-
-  if (phase === 'idle') {
-    return (
-      <button
-        onClick={start}
-        className="text-xs tracking-widest text-[#444] transition-colors hover:text-[#888]"
-      >
-        {type === 'manga' ? 'DOWNLOAD ZIP' : 'DOWNLOAD'}
-      </button>
-    );
-  }
-
-  if (phase === 'done') {
-    return <span className="text-xs tracking-widest text-[#2a6]">SAVED</span>;
-  }
-
-  if (phase === 'error') {
-    return (
-      <button
-        onClick={() => setPhase('idle')}
-        title={label}
-        className="text-xs tracking-widest text-red-900 transition-colors hover:text-red-700"
-      >
-        FAILED ✕
-      </button>
-    );
-  }
-
-  // active
-  return (
-    <div className="flex items-center gap-3">
-      <span className="max-w-[200px] truncate text-xs text-[#555]">{label}</span>
-      <button
-        onClick={start}
-        className="text-xs tracking-widest text-[#333] transition-colors hover:text-red-900"
-      >
-        CANCEL
-      </button>
-    </div>
-  );
-}
+import { Combobox } from '../components/ui/Select';
+import { Button } from '../components/ui/Button';
 
 function Player({
   stream,
-  subtitles,
-  langUI,
+  activeUrl,
+  isHls,
 }: {
-  stream: api.VideoStream;
-  /** Subtitle tracks to render — the caller hands these in so the selector can
-   *  reflect what the SDK actually advertised for this unit (via `/tracks` and
-   *  falling back to `stream.subtitles`). */
-  subtitles: api.SubtitleTrack[];
-  langUI?: React.ReactNode;
+  stream: api.Stream;
+  activeUrl: string;
+  isHls: boolean;
 }) {
   const ref = useRef<HTMLVideoElement>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
-  const [hlsSubTracks, setHlsSubTracks] = useState<{ id: number; name: string; lang: string }[]>(
-    [],
-  );
-  // -1 = off; 0..N-1 = external <track>; 1000+i = HLS track i (kept distinct so the
-  // two source sets don't collide).
-  const [activeSub, setActiveSub] = useState<number>(-1);
+  const [activeSub, setActiveSub] = useState<number>(stream.subtitles.length > 0 ? 0 : -1);
   const hlsRef = useRef<Hls | undefined>(undefined);
-  const externalSubs = subtitles;
 
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
     setPlayerError(null);
-    setHlsSubTracks([]);
-    setActiveSub(externalSubs.length > 0 ? 0 : -1);
 
     let hls: Hls | undefined;
-    if (stream.isHLS) {
+    if (isHls) {
       if (Hls.isSupported()) {
         hls = new Hls({ enableWorker: false });
-        hls.subtitleDisplay = true;
         hls.on(Hls.Events.ERROR, (_, d) => {
           if (d.fatal) setPlayerError(`HLS error: ${d.details}`);
         });
-        hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, (_, d) => {
-          const tracks = (d.subtitleTracks ?? []).map((t: any) => ({
-            id: t.id,
-            name: t.name ?? t.lang ?? `Track ${t.id}`,
-            lang: t.lang ?? '',
-          }));
-          setHlsSubTracks(tracks);
-          // Only auto-enable an HLS track if we don't already have an external one.
-          if (tracks.length > 0 && externalSubs.length === 0) {
-            hls!.subtitleTrack = 0;
-            setActiveSub(1000);
-          } else {
-            hls!.subtitleTrack = -1;
-          }
-        });
-        hls.loadSource(stream.sourceUrl);
+        hls.loadSource(activeUrl);
         hls.attachMedia(v);
         hlsRef.current = hls;
         v.play().catch(() => {});
       } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
-        v.src = stream.sourceUrl;
+        v.src = activeUrl;
         v.play().catch(() => {});
       } else {
         setPlayerError('HLS not supported in this browser');
       }
     } else {
-      v.src = stream.sourceUrl;
+      v.src = activeUrl;
       v.play().catch(() => {});
     }
 
@@ -196,10 +51,8 @@ function Player({
       hlsRef.current = undefined;
       v.src = '';
     };
-  }, [stream.sourceUrl, stream.isHLS, externalSubs.length]);
+  }, [activeUrl, isHls]);
 
-  // Apply external-track selection imperatively: <track default> alone doesn't
-  // reliably enable a track across browsers, and toggling needs runtime control.
   useEffect(() => {
     const v = ref.current;
     if (!v) return;
@@ -207,21 +60,12 @@ function Player({
     for (let i = 0; i < textTracks.length; i++) {
       textTracks[i].mode = activeSub === i ? 'showing' : 'disabled';
     }
-  }, [activeSub, externalSubs.length]);
-
-  const selectSub = (key: number) => {
-    setActiveSub(key);
-    if (hlsRef.current) {
-      hlsRef.current.subtitleTrack = key >= 1000 ? key - 1000 : -1;
-    }
-  };
-
-  const hasSubtitleUI = hlsSubTracks.length > 0 || externalSubs.length > 0;
+  }, [activeSub]);
 
   if (playerError) {
     return (
-      <div className="flex aspect-video items-center justify-center border border-[#1e1e1e] bg-[#0d0d0d]">
-        <p className="text-xs text-[#444]">{playerError}</p>
+      <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
+        <p className="text-base-400 text-xs">{playerError}</p>
       </div>
     );
   }
@@ -232,54 +76,165 @@ function Player({
         ref={ref}
         controls
         crossOrigin="anonymous"
-        className="mb-4 aspect-video w-full border border-[#1e1e1e] bg-black"
+        className="border-base-200 bg-base-0 mb-4 aspect-video w-full border"
       >
-        {externalSubs.map((s, i) => (
-          <track
-            key={`${stream.sourceUrl}-${i}`}
-            kind="subtitles"
-            src={s.url}
-            srcLang={s.language}
-            label={s.label}
-          />
+        {stream.subtitles.map((s, i) => (
+          <track key={i} kind="subtitles" src={s.url} srcLang={s.language} label={s.label} />
         ))}
       </video>
-      {langUI}
-      {hasSubtitleUI && (
-        <div className="flex items-center gap-2 border-t border-[#1a1a1a] px-1 py-2">
-          <span className="text-xs tracking-widest text-[#444]">SUB</span>
-          <select
-            value={activeSub}
-            onChange={(e) => selectSub(Number(e.target.value))}
-            className="cursor-pointer bg-transparent text-xs text-white outline-none"
-          >
-            <option value={-1} className="bg-[#0f0f0f]">
-              off
-            </option>
-            {externalSubs.map((s, i) => (
-              <option key={`ext-${i}`} value={i} className="bg-[#0f0f0f]">
-                {s.label}
-              </option>
-            ))}
-            {hlsSubTracks.map((t) => (
-              <option key={`hls-${t.id}`} value={1000 + t.id} className="bg-[#0f0f0f]">
-                {t.name}
-              </option>
-            ))}
-          </select>
+      {stream.subtitles.length > 0 && (
+        <div className="border-base-200 flex items-center gap-2 border-t px-1 py-2">
+          <span className="text-base-400 text-xs tracking-widest">SUB</span>
+          <Combobox
+            value={String(activeSub)}
+            onValueChange={(v) => setActiveSub(Number(v))}
+            options={[
+              { value: '-1', label: 'off' },
+              ...stream.subtitles.map((s, i) => ({ value: String(i), label: s.label })),
+            ]}
+          />
         </div>
       )}
     </div>
   );
 }
 
-function MangaReader({ pages }: { pages: api.MangaStream }) {
+interface DownloadProgress {
+  active: boolean;
+  phase?: string;
+  detail?: string;
+  downloaded?: number;
+  total?: number;
+  error?: string;
+}
+
+function VideoDownloadButton({
+  episodeId,
+  language,
+  filename,
+}: {
+  episodeId: string;
+  language: api.Language;
+  filename: string;
+}) {
+  const [progress, setProgress] = useState<DownloadProgress>({ active: false });
+  const handleRef = useRef<api.DownloadHandle | null>(null);
+
+  useEffect(() => () => handleRef.current?.close(), []);
+
+  const start = () => {
+    setProgress({ active: true, phase: 'starting' });
+    handleRef.current = api.watchVideoDownload(episodeId, language, {
+      onProgress: ({ phase, detail }) => setProgress({ active: true, phase, detail }),
+      onComplete: (token) => {
+        setProgress({ active: false });
+        triggerDownload(api.downloadFileUrl('video', token), `${filename}.mp4`);
+      },
+      onError: (msg) => setProgress({ active: false, error: msg }),
+    });
+  };
+
+  if (progress.active) {
+    return (
+      <div className="text-base-450 flex items-center gap-2 text-[10px]">
+        <span className="tracking-widest">DOWNLOADING</span>
+        <span className="text-base-350">
+          {progress.phase}
+          {progress.detail ? ` · ${progress.detail.slice(0, 60)}` : ''}
+        </span>
+        <button
+          onClick={() => {
+            handleRef.current?.close();
+            setProgress({ active: false });
+          }}
+          className="text-base-400 hover:text-base-700 transition-colors"
+        >
+          cancel
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="mb-4 flex flex-col items-center gap-4 bg-black">
-      {pages.imageUrls.map((url, i) => (
+    <div className="flex items-center gap-2">
+      <Button onClick={start} variant="outline" className="px-3 py-1 text-[10px]">
+        DOWNLOAD MP4
+      </Button>
+      {progress.error && (
+        <span className="text-[10px] text-red-900">{progress.error.slice(0, 80)}</span>
+      )}
+    </div>
+  );
+}
+
+function ChapterDownloadButton({ chapterId, filename }: { chapterId: string; filename: string }) {
+  const [progress, setProgress] = useState<DownloadProgress>({ active: false });
+  const handleRef = useRef<api.DownloadHandle | null>(null);
+
+  useEffect(() => () => handleRef.current?.close(), []);
+
+  const start = () => {
+    setProgress({ active: true, downloaded: 0, total: 0 });
+    handleRef.current = api.watchChapterDownload(chapterId, {
+      onProgress: ({ downloaded, total }) => setProgress({ active: true, downloaded, total }),
+      onComplete: (token) => {
+        setProgress({ active: false });
+        triggerDownload(api.downloadFileUrl('manga-chapter', token), `${filename}.zip`);
+      },
+      onError: (msg) => setProgress({ active: false, error: msg }),
+    });
+  };
+
+  if (progress.active) {
+    const total = progress.total ?? 0;
+    const done = progress.downloaded ?? 0;
+    return (
+      <div className="text-base-450 flex items-center gap-2 text-[10px]">
+        <span className="tracking-widest">DOWNLOADING</span>
+        <span className="text-base-350">
+          {done}/{total > 0 ? total : '?'} pages
+        </span>
+        <button
+          onClick={() => {
+            handleRef.current?.close();
+            setProgress({ active: false });
+          }}
+          className="text-base-400 hover:text-base-700 transition-colors"
+        >
+          cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button onClick={start} variant="outline" className="px-3 py-1 text-[10px]">
+        DOWNLOAD ZIP
+      </Button>
+      {progress.error && (
+        <span className="text-[10px] text-red-900">{progress.error.slice(0, 80)}</span>
+      )}
+    </div>
+  );
+}
+
+function triggerDownload(url: string, filename: string): void {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+function MangaReader({ pages }: { pages: api.Pages }) {
+  return (
+    <div className="bg-base-0 mb-4 flex flex-col items-center gap-4">
+      {pages.pages.map((p, i) => (
         <img
           key={i}
-          src={url}
+          src={p.url}
           alt={`Page ${i + 1}`}
           className="min-h-64 max-w-full"
           loading="lazy"
@@ -293,262 +248,180 @@ export default function Stream() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
 
-  const provider = sp.get('provider') || '';
-  const unitId = sp.get('uid') || '';
+  const episodeId = sp.get('epid') || '';
+  const chapterId = sp.get('chid') || '';
   const title = sp.get('title') || '';
   const mediaId = sp.get('mid') || '';
-  const epLabel = sp.get('ep') || '';
-  const type = sp.get('type') || 'ANIME';
 
-  const isManga = type === 'MANGA';
-  const unitLabel = isManga ? 'CHAPTERS' : 'EPISODES';
-  const unitPrefix = isManga ? 'Chapter' : 'EP';
+  const isManga = !!chapterId;
 
-  // Language lives in component state — never in the URL. The episode list is
-  // language-agnostic; only the playback resolution needs a language pick.
-  const [lang, setLang] = useState<api.Lang>('sub');
-  const [activeIdx, setActiveIdx] = useState(0);
-  const [showEpisodes, setShowEpisodes] = useState(false);
+  // Progressive streams — arrive from all sources as SSE events
+  const [streams, setStreams] = useState<api.Stream[]>([]);
+  const [streamsLoading, setStreamsLoading] = useState(false);
+  const [streamsError, setStreamsError] = useState<string | null>(null);
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
 
-  // Episode list — language-agnostic, one call. Each episode advertises its
-  // own `availableLanguages`; we use the current episode's list to decide
-  // which LANG buttons make sense.
-  const { data: episodes } = useQuery<api.Episode[]>({
-    queryKey: ['content', provider, mediaId],
-    queryFn: () => api.content(provider, mediaId),
-    enabled: !!(provider && mediaId),
-    staleTime: 5 * 60 * 1000,
-  });
+  const subStreams = streams.filter((s) => s.language === 'sub');
+  const dubStreams = streams.filter((s) => s.language === 'dub');
+  const rawStreams = streams.filter((s) => s.language === 'raw');
+  const activeStream = activeIdx != null ? streams[activeIdx] : (subStreams[0] ?? streams[0]);
 
-  const currentEpNum = epLabel ? parseFloat(epLabel.replace(/^[A-Z]+\./i, '')) : null;
-  const currentIdx = episodes?.findIndex((e) => e.number === currentEpNum) ?? -1;
-  const currentEpisode = currentIdx >= 0 ? episodes![currentIdx] : null;
-  const availableLangs = currentEpisode?.availableLanguages ?? ['sub'];
-
-  // If our current `lang` isn't one this episode supports, drop to the first
-  // language that *is* supported.
+  // Reset when episode changes
   useEffect(() => {
-    if (availableLangs.length > 0 && !availableLangs.includes(lang)) {
-      setLang(availableLangs[0]);
-    }
-  }, [availableLangs, lang]);
+    if (!episodeId) return;
+    setStreams([]);
+    setStreamsLoading(true);
+    setStreamsError(null);
+    setActiveIdx(null);
 
-  const { data, isFetching, isError, error } = useQuery<api.ResolvedStream>({
-    queryKey: ['stream', provider, unitId, lang],
-    queryFn: () => api.stream(provider, unitId, lang),
-    enabled: !!(provider && unitId),
-  });
-
-  const streams = data?.type === 'video' ? (data.streams ?? []) : [];
-  const active = streams[activeIdx] ?? null;
-  const subtitles = active?.subtitles ?? [];
-
-  const prevEp = currentIdx > 0 ? episodes![currentIdx - 1] : null;
-  const nextEp =
-    currentIdx >= 0 && currentIdx < (episodes?.length ?? 0) - 1 ? episodes![currentIdx + 1] : null;
-
-  const goEpisode = (ep: api.Episode) =>
-    navigate(
-      `/stream?provider=${provider}&uid=${encodeURIComponent(ep.id)}` +
-        `&title=${encodeURIComponent(title)}&ep=${encodeURIComponent(`${unitPrefix}.${String(ep.number).padStart(3, '0')}`)}&mid=${encodeURIComponent(mediaId)}&type=${type}`,
+    const handle = api.episodeStreams(
+      episodeId,
+      mediaId || undefined,
+      (s) => {
+        setStreams((prev) => [...prev, s]);
+      },
+      () => setStreamsLoading(false),
+      (e) => {
+        setStreamsError(e);
+        setStreamsLoading(false);
+      },
     );
+    return () => handle.close();
+  }, [episodeId, mediaId]);
 
-  // Reset active source when stream changes
+  const [pagesData, setPagesData] = useState<api.Pages | null>(null);
+  const [pagesFetching, setPagesFetching] = useState(false);
+  const [pagesError, setPagesError] = useState<string | null>(null);
+
   useEffect(() => {
-    setActiveIdx(0);
-  }, [unitId, lang]);
+    if (!chapterId) return;
+    setPagesFetching(true);
+    api
+      .chapterPages(chapterId)
+      .then((p) => {
+        setPagesData(p);
+        setPagesFetching(false);
+      })
+      .catch((e) => {
+        setPagesError(String(e));
+        setPagesFetching(false);
+      });
+  }, [chapterId]);
+
+  const activeUrl = activeStream?.url ?? '';
+  const activeIsHls = activeStream?.isHls ?? false;
+
+  const isFetching = streamsLoading || pagesFetching;
+  const isError = !!streamsError || !!pagesError;
+  const error = streamsError || pagesError;
+
+  const filename = `${(title || 'episode').replace(/[^a-z0-9_-]+/gi, '_').slice(0, 40)}_${
+    isManga ? 'chapter' : 'episode'
+  }`;
 
   return (
     <div className="px-4">
-      <div className="mt-5">
-        {isFetching && (
-          <div className="flex aspect-video items-center justify-center border border-[#1e1e1e] bg-[#0d0d0d]">
-            <p className="text-xs tracking-widest text-[#333]">
-              resolving {isManga ? 'pages' : 'stream'}...
-            </p>
-          </div>
-        )}
-        {isError && (
-          <div className="flex aspect-video items-center justify-center border border-[#1e1e1e] bg-[#0d0d0d]">
-            <p className="text-xs text-red-900">{String(error)}</p>
-          </div>
-        )}
-        {data?.type === 'video' && active && (
-          <Player
-            key={active.sourceUrl}
-            stream={active}
-            subtitles={subtitles}
-            langUI={
-              availableLangs.length > 1 && (
-                <div className="flex items-center gap-2 border-t border-[#1a1a1a] px-1 py-2">
-                  <span className="text-xs tracking-widest text-[#444]">LANG</span>
-                  {availableLangs.map((l) => (
-                    <button
-                      key={l}
-                      onClick={() => setLang(l)}
-                      className={`text-xs tracking-widest uppercase transition-colors ${
-                        lang === l ? 'text-white' : 'text-[#444] hover:text-[#888]'
-                      }`}
-                    >
-                      {l}
-                    </button>
-                  ))}
-                </div>
-              )
-            }
-          />
-        )}
-        {data?.type === 'manga' && data.pages && (
-          <>
-            <MangaReader pages={data.pages} />
-            <div className="flex items-center justify-end border-t border-[#1a1a1a] px-1 py-2">
-              <DownloadButton provider={provider} unitId={unitId} language={lang} type="manga" />
-            </div>
-            {availableLangs.length > 1 && (
-              <div className="flex items-center gap-2 border-t border-[#1a1a1a] px-1 py-2">
-                <span className="text-xs tracking-widest text-[#444]">LANG</span>
-                {availableLangs.map((l) => (
-                  <button
-                    key={l}
-                    onClick={() => setLang(l)}
-                    className={`text-xs tracking-widest uppercase transition-colors ${
-                      lang === l ? 'text-white' : 'text-[#444] hover:text-[#888]'
-                    }`}
-                  >
-                    {l}
-                  </button>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Episode navigation */}
-      {episodes && (
-        <div className="mb-0 border-t border-[#1a1a1a]">
-          <div className="flex items-center justify-between px-1 py-2">
-            <button
-              onClick={() => setShowEpisodes((v) => !v)}
-              className="text-xs tracking-widest text-[#444] transition-colors hover:text-[#777]"
-            >
-              {unitLabel} <span className="text-[#333]">({episodes.length})</span>{' '}
-              {showEpisodes ? '▲' : '▼'}
-            </button>
-            <div className="flex gap-3">
-              <button
-                disabled={!prevEp}
-                onClick={() => prevEp && goEpisode(prevEp)}
-                className="text-xs text-[#444] transition-colors hover:text-[#aaa] disabled:cursor-default disabled:text-[#252525]"
-              >
-                ← PREV
-              </button>
-              <button
-                disabled={!nextEp}
-                onClick={() => nextEp && goEpisode(nextEp)}
-                className="text-xs text-[#444] transition-colors hover:text-[#aaa] disabled:cursor-default disabled:text-[#252525]"
-              >
-                NEXT →
-              </button>
-            </div>
-          </div>
-
-          {showEpisodes && (
-            <div className="max-h-64 overflow-y-auto border-t border-[#141414]">
-              {episodes.map((ep) => {
-                const isCurrent = ep.number === currentEpNum;
-                return (
-                  <button
-                    key={ep.id}
-                    onClick={() => goEpisode(ep)}
-                    className={`flex w-full items-center justify-between border-b border-[#0f0f0f] px-2 py-2 text-left transition-colors hover:bg-[#111] ${isCurrent ? 'bg-[#0f0f0f]' : ''}`}
-                  >
-                    <span
-                      className={`mr-4 shrink-0 text-xs ${isCurrent ? 'text-white' : 'text-[#444]'}`}
-                    >
-                      {unitPrefix}.{String(ep.number).padStart(3, '0')}
-                    </span>
-                    <span
-                      className={`flex-1 truncate text-xs ${isCurrent ? 'text-[#bbb]' : 'text-[#333]'}`}
-                    >
-                      {ep.title}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+      {mediaId && (
+        <div className="text-base-400 mt-4 flex items-center gap-2 text-[10px]">
+          <Link
+            to={`/media?id=${encodeURIComponent(mediaId)}`}
+            className="hover:text-base-600 transition-colors"
+          >
+            ← {title || 'back'}
+          </Link>
         </div>
       )}
 
-      {/* Source selector */}
-      {streams.length > 0 && (
-        <div className="border-t border-[#1a1a1a]">
-          <div className="flex items-center justify-between px-1 py-2">
-            <span className="text-xs tracking-widest text-[#444]">
-              SOURCES <span className="text-[#333]">({streams.length})</span>
-            </span>
-            <DownloadButton provider={provider} unitId={unitId} language={lang} type="video" />
+      <div className="mt-5">
+        {isFetching && !activeStream && (
+          <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
+            <p className="text-base-350 text-xs tracking-widest">
+              resolving {isManga ? 'pages' : 'streams'}...
+            </p>
           </div>
-          {streams.map((s, i) => {
-            let displayUrl = s.sourceUrl;
-            try {
-              const u = new URL(s.sourceUrl);
-              if (u.pathname === '/proxy' && u.searchParams.has('url')) {
-                const targetUrl = new URL(u.searchParams.get('url')!);
-                displayUrl = targetUrl.hostname;
-              } else {
-                displayUrl = u.hostname;
-              }
-            } catch {}
+        )}
+        {isError && !activeStream && (
+          <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
+            <p className="text-xs text-red-900">{String(error)}</p>
+          </div>
+        )}
 
-            return (
-              <div
-                key={i}
-                className={`group flex w-full items-start gap-3 border-b border-[#141414] px-2 py-3 transition-colors hover:bg-[#111] ${i === activeIdx ? 'bg-[#0f0f0f]' : ''}`}
-              >
-                <button
-                  onClick={() => setActiveIdx(i)}
-                  className="flex min-w-0 flex-1 items-start gap-3 text-left"
-                >
-                  <span
-                    className={`mt-0.5 shrink-0 text-xs ${i === activeIdx ? 'text-white' : 'text-[#333]'}`}
-                  >
-                    {i === activeIdx ? '●' : '○'}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="mb-1 text-xs text-[#ccc]">
-                      Server {i + 1}
-                      <span className="ml-2 text-[#666]">
-                        [{s.isHLS ? 'HLS' : 'MP4'}] {s.quality}
-                        {s.language ? `  ${s.language}` : ''}
-                      </span>
-                    </div>
-                    <div
-                      className={`truncate text-xs ${i === activeIdx ? 'text-[#4a9eff]' : 'text-[#444] group-hover:text-[#666]'}`}
-                    >
-                      {displayUrl}
-                    </div>
-                  </div>
-                </button>
-                <a
-                  href={s.sourceUrl}
-                  download={!s.isHLS}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={
-                    s.isHLS
-                      ? 'Open HLS manifest (use downloadVideo() to save as MP4)'
-                      : 'Download MP4'
-                  }
-                  onClick={(e) => e.stopPropagation()}
-                  className="mt-0.5 shrink-0 text-xs text-[#333] transition-colors hover:text-[#888]"
-                >
-                  {s.isHLS ? '↗' : '↓'}
-                </a>
+        {activeStream && (
+          <Player key={activeUrl} stream={activeStream} activeUrl={activeUrl} isHls={activeIsHls} />
+        )}
+
+        {/* Manga chapter controls live above the reader so they aren't
+            buried under hundreds of scrolling pages. */}
+        {pagesData && (
+          <div className="border-base-200 mb-3 flex items-center gap-3 border-y px-1 py-2">
+            <span className="text-base-400 text-[10px] tracking-widest">
+              {pagesData.pages.length} pages
+            </span>
+            <div className="ml-auto">
+              <ChapterDownloadButton chapterId={chapterId} filename={filename} />
+            </div>
+          </div>
+        )}
+
+        {pagesData && <MangaReader pages={pagesData} />}
+      </div>
+
+      {/* Stream picker: one row per language */}
+      {streams.length > 0 && (
+        <div className="border-base-100 mt-2 divide-y border-t">
+          {(
+            [
+              { label: 'SUB', rows: subStreams },
+              { label: 'DUB', rows: dubStreams },
+              { label: 'RAW', rows: rawStreams },
+            ] as const
+          ).map(({ label, rows }) =>
+            rows.length === 0 ? null : (
+              <div key={label} className="flex items-center gap-4 px-1 py-2">
+                <span className="text-base-300 w-8 shrink-0 text-[10px] tracking-widest">
+                  {label}
+                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  {rows.map((s, i) => {
+                    const idx = streams.indexOf(s);
+                    const active = s === activeStream;
+                    return (
+                      <button
+                        key={`${s.source}-${s.server}-${i}`}
+                        onClick={() => setActiveIdx(idx)}
+                        className={`text-xs tracking-widest uppercase transition-colors ${
+                          active ? 'text-base-900' : 'text-base-400 hover:text-base-600'
+                        }`}
+                      >
+                        {s.source}·{s.server} {s.quality !== 'auto' ? s.quality : ''}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            );
-          })}
+            ),
+          )}
+
+          {activeStream && (
+            <div className="flex flex-wrap items-center gap-4 px-1 py-2">
+              <div className="text-base-350 text-[10px]">
+                {activeStream.source} · {activeStream.server} · {activeStream.quality}
+              </div>
+              <div className="ml-auto">
+                <VideoDownloadButton
+                  episodeId={episodeId}
+                  language={activeStream.language}
+                  filename={filename}
+                />
+              </div>
+            </div>
+          )}
+
+          {streamsLoading && (
+            <div className="px-1 py-1">
+              <span className="text-base-300 text-[10px] tracking-widest">loading…</span>
+            </div>
+          )}
         </div>
       )}
     </div>

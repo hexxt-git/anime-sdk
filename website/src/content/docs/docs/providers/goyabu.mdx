@@ -1,79 +1,29 @@
 ---
-title: GoyabuProvider
-description: Provider for goyabu.io that resolves Brazilian Portuguese anime streams via Google batchexecute.
+title: goyabu
+description: Anime playback source for goyabu.io — Brazilian Portuguese dub via Google batchexecute.
 ---
 
-`GoyabuProvider` targets `goyabu.io`, a Brazilian Portuguese anime site. Episodes are hosted as Blogger video embeds. The provider extracts Blogger tokens from the `playersData` JS literal on each episode page and passes them to `BloggerExtractor`, which calls Google's `batchexecute` RPC to recover the actual `googlevideo.com` MP4 URLs.
+`GoyabuSource` resolves Brazilian Portuguese (pt-br) dubbed anime from `goyabu.io`. Extracts Blogger video tokens from `playersData` on episode pages, then calls Google's `batchexecute` API to recover `googlevideo.com` MP4 URLs.
 
-## Constructor
+## Capabilities
 
-```ts
-import { HttpClient, GoyabuProvider } from 'anime-sdk';
-
-const provider = new GoyabuProvider(new HttpClient());
-
-// Override the base URL:
-const provider = new GoyabuProvider(client, {
-  baseUrl: 'https://goyabu.io',
-});
-```
-
-```ts
-interface GoyabuOptions {
-  baseUrl?: string; // defaults to 'https://goyabu.io'
-}
-```
+- `search`, `episodes`, `stream`
 
 ## Usage
 
 ```ts
-import { HttpClient, GoyabuProvider } from 'anime-sdk';
+import { createSdk } from 'anime-sdk';
 
-const provider = new GoyabuProvider(new HttpClient());
+const sdk = createSdk({ sources: ['goyabu'] });
 
-// Search
-const shows = await provider.search('Naruto');
-// shows[0] => { id: '/anime/naruto', title: 'Naruto', ... }
-
-// Episodes
-const eps = await provider.fetchContentUnits(shows[0].id);
-// eps[0] => { id: '/40742', title: 'Episódio 1', number: 1,
-//             availableLanguages: ['sub'] }
-
-// Stream
-const result = await provider.resolveStream(eps[0].id);
-if (result.type === 'video') {
-  const s = result.streams[0];
-  // s.sourceUrl → 'https://...googlevideo.com/...'
-  // s.isHLS → false (MP4)
-  // s.quality → '720p' | '360p' | 'auto'
-}
+const results = await sdk.search('Naruto', { kind: 'anime' });
+const { items: episodes } = await sdk.episodes(results[0]);
+const stream = await sdk.stream(episodes[0]);
+// stream.language → 'sub' (but the audio is Brazilian Portuguese dub)
 ```
 
-## Language
+## Notes
 
-Goyabu is a Brazilian Portuguese site. The language reported per unit depends on whether the show is dubbed:
-
-- Shows whose media ID contains `"dublado"` report `availableLanguages: ['dub']`: the audio is PT-BR dub.
-- All other shows report `availableLanguages: ['sub']`: original Japanese audio, no subtitles (the "sub" here refers to the content type, not the presence of subtitle tracks).
-
-The `language` parameter on `resolveStream` is ignored; stream resolution is the same regardless.
-
-## How it works
-
-1. **Search**: GET `{baseUrl}/?s={query}`. Searches for `article.boxAN` cards; extracts the `href` (must include `/anime/`) as the ID and reads the title from `.title`, `h3`, or `h2`.
-
-2. **Episodes**: GET the show page. Tries up to five regex patterns to extract a JS array (`allEpisodes`, `episodes`, `episodios`, etc.) from the inline `<script>` blocks. Each array entry is expected to have `episodio` (episode number) and `link` (content unit ID). If no JS array is found, falls back to parsing `<a>` elements with `/?p=` or `/episode/` in the href.
-
-3. **Stream resolution**: GET the episode page. Extracts `playersData = [...]` from the page HTML as a JSON literal; each object in the array with a `url` field matching `blogger.com/video.g` is collected. Each Blogger URL is passed to `BloggerExtractor.extract()`:
-   - Fetch the Blogger embed page to extract `FdrFJe` (session ID) and `cfb2h` (build hash).
-   - POST to `https://www.blogger.com/_/BloggerVideoPlayerUi/data/batchexecute` with the `WcwnYd` RPC.
-   - Parse the response: walk the `wrb.fr` / `WcwnYd` entries, find the stream array, prefer `itag=22` (720p) over `itag=18` (360p).
-   - Falls back to a raw regex scan for `googlevideo.com` URLs if structured parsing yields nothing.
-
-4. **Direct stream fallback**: if no Blogger URLs are found or all fail, the provider scans the episode page HTML directly for `"file":` patterns referencing `.m3u8` or `.mp4`.
-
-## Important caveats
-
-- **`googlevideo.com` URLs are time-limited**: they expire and are IP-tied. Do not cache them. Each playback session needs a fresh `resolveStream` call.
-- A `Chrome/120` User-Agent is set automatically if not already configured.
+- Only source for Brazilian Portuguese content.
+- If the Blogger batchexecute returns no result, the source tries to scrape direct `.m3u8` / `.mp4` URLs from the page.
+- Requires the site to be reachable (`goyabu.io` can be intermittent).

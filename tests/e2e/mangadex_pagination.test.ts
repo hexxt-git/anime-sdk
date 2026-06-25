@@ -1,22 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { HttpClient } from '../../src/transport/http.js';
-import { MangadexProvider } from '../../src/providers/MangadexProvider.js';
+import { HttpClient } from '../../src/internal/http.js';
+import { MangadexSource } from '../../src/sources/mangadex.js';
+import { decodeId } from '../../src/internal/id.js';
 
 describe('Mangadex E2E Pagination', () => {
-  it('fetches more than 500 chapters for One Piece', async () => {
+  it('fetches more than 500 chapters for Kaguya-sama', async () => {
     const http = new HttpClient({ timeoutMs: 30000 });
-    const provider = new MangadexProvider(http);
+    const source = new MangadexSource(http);
 
-    const query = 'Kaguya-sama';
-    const searchResults = await provider.search(query);
-    expect(searchResults.length).toBeGreaterThan(0);
+    const results = await source.search('Kaguya-sama', 'manga', {});
+    expect(results.length).toBeGreaterThan(0);
 
-    const target = searchResults.find((r) => r.title.includes('Kaguya-sama')) || searchResults[0];
-    console.log(`Mangadex selected: ${target.title} (${target.id})`);
+    const target = results.find((r) => r.title.preferred.includes('Kaguya-sama')) ?? results[0];
+    const decoded = decodeId(target.id);
+    console.log(`Mangadex selected: ${target.title.preferred} (${decoded.r})`);
 
-    const units = await provider.fetchContentUnits(target.id);
-    console.log(`Mangadex found ${units.length} chapters for Kaguya-sama`);
+    const list = await source.chapters(decoded.r, {});
+    console.log(`Mangadex found ${list.items.length} chapters for Kaguya-sama`);
 
-    expect(units.length).toBeGreaterThan(500);
+    expect(list.items.length).toBeGreaterThan(500);
   }, 120000);
 });

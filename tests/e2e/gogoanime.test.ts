@@ -1,41 +1,36 @@
 /**
- * E2E integration tests for GogoanimeProvider (anineko.to backend).
- *
- * To run: npx vitest run tests/e2e/gogoanime.test.ts
+ * E2E integration tests for GogoanimeSource (anineko.to backend).
  */
 import { describe, it, expect } from 'vitest';
-import { HttpClient } from '../../src/transport/http.js';
-import { GogoanimeProvider } from '../../src/providers/GogoanimeProvider.js';
-import { captureStreamScreenshot } from './screenshotHelper.js';
+import { HttpClient } from '../../src/internal/http.js';
+import { GogoanimeSource } from '../../src/sources/gogoanime.js';
+import { decodeId } from '../../src/internal/id.js';
+import { captureStreamScreenshot, streamToPayload } from './screenshotHelper.js';
 
 describe('GogoAnime E2E', () => {
   it('searches, fetches episodes, resolves a stream, and captures a screenshot', async () => {
     const http = new HttpClient({ timeoutMs: 25000 });
-    const provider = new GogoanimeProvider(http);
+    const source = new GogoanimeSource(http);
 
-    const query = 'Frieren';
-    const searchResults = await provider.search(query);
-    expect(searchResults.length).toBeGreaterThan(0);
+    const results = await source.search('Frieren', 'anime', {});
+    expect(results.length).toBeGreaterThan(0);
 
-    const target = searchResults[0];
-    expect(target.providerId).toBe('gogoanime');
-    console.log(`GogoAnime selected: ${target.title} (${target.id})`);
+    const target = results[0];
+    const decoded = decodeId(target.id);
+    expect(decoded.s).toBe('gogoanime');
+    console.log(`GogoAnime selected: ${target.title.preferred} (${decoded.r})`);
 
-    const units = await provider.fetchContentUnits(target.id);
-    expect(units.length).toBeGreaterThan(0);
+    const list = await source.episodes(decoded.r, {});
+    expect(list.items.length).toBeGreaterThan(0);
 
-    const ep1 = units[0];
-    const stream = await provider.resolveStream(ep1.id);
-    expect(stream.type).toBe('video');
-    if (stream.type !== 'video') return;
-    expect(stream.streams.length).toBeGreaterThan(0);
+    const streams = await source.stream(list.items[0].id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    const stream = streams[0];
+    expect(stream.url).toBeTruthy();
+    expect(stream.source).toBe('gogoanime');
+    console.log(`GogoAnime stream: ${stream.url.slice(0, 80)} (${stream.language})`);
 
-    console.log(
-      `GogoAnime resolved ${stream.streams.length} stream candidate(s); ` +
-        `top: ${stream.streams[0].sourceUrl.slice(0, 80)}`,
-    );
-
-    const result = await captureStreamScreenshot('gogoanime', stream.streams);
+    const result = await captureStreamScreenshot('gogoanime', streamToPayload(stream));
     expect(result.outputPath).toMatch(/screenshot_gogoanime\.png$/);
   }, 90000);
 });

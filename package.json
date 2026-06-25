@@ -22,6 +22,9 @@
     "scraper",
     "api"
   ],
+  "bin": {
+    "anime-sdk": "./dist/server/cli.js"
+  },
   "files": [
     "dist"
   ],
@@ -30,6 +33,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js",
+      "require": "./dist/server/index.cjs"
     }
   },
   "scripts": {
