@@ -48,9 +48,8 @@ export class GogoanimeSource implements Source {
         kind: 'anime',
         title: { preferred: title },
         cover: coverUrl ? { url: coverUrl } : undefined,
-        catalogues: [this.id],
-        playbackSources: [this.id],
-        mappings: { sources: { [this.id]: id } },
+        source: this.id,
+        mappings: {},
       });
     }
     return out;
@@ -88,19 +87,16 @@ export class GogoanimeSource implements Source {
       const displayTitle = titleText ? `${numText} - ${titleText}` : numText || `Episode ${number}`;
       items.push({
         id: encodeId({ t: 'episode', s: this.id, r: epId }),
-        mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
         number,
         title: displayTitle,
         languages: [mediaId.toLowerCase().includes('-dub') ? 'dub' : 'sub'],
-        qualities: ['auto'],
-        source: this.id,
       });
     }
     items.sort((a, b) => a.number - b.number);
     return { items };
   }
 
-  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream> {
+  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream[]> {
     const { r: rawUnit } = decodeId(episodeId);
     const fullUrl = `${this.baseUrl}${rawUnit.startsWith('/') ? '' : '/'}${rawUnit}`;
     const res = await this.http.get(fullUrl, { signal: opts.signal });
@@ -138,20 +134,22 @@ export class GogoanimeSource implements Source {
       } catch {}
     }
     const payloads = resolved.length > 0 ? resolved : embeds;
-    const primary = payloads[0];
-    let host = '';
-    try {
-      host = new URL(primary.sourceUrl).hostname;
-    } catch {}
-    return {
-      url: primary.sourceUrl,
-      origin: { host, url: primary.sourceUrl, proxied: false },
-      isHls: primary.isHLS,
-      qualities: payloads.map((p) => ({ label: p.quality, url: p.sourceUrl })),
-      language: 'sub',
-      subtitles: [],
-      headers: primary.headers,
-      adjacent: {},
-    };
+    const lang = rawUnit.toLowerCase().includes('-dub') ? 'dub' : 'sub';
+    return payloads.map((p): Stream => {
+      let server = 'gogoanime';
+      try {
+        server = new URL(p.sourceUrl).hostname;
+      } catch {}
+      return {
+        url: p.sourceUrl,
+        source: this.id,
+        server,
+        quality: p.quality,
+        language: lang,
+        isHls: p.isHLS,
+        headers: p.headers,
+        subtitles: [],
+      };
+    });
   }
 }

@@ -13,7 +13,7 @@ describe('AnilistSource (live)', () => {
     const first = results[0];
     expect(first.kind).toBe('anime');
     expect(first.title.preferred).toBeTruthy();
-    expect(first.catalogues).toContain('anilist');
+    expect(first.source).toBe('anilist');
     expect(first.mappings.anilist).toBeTypeOf('number');
 
     const decoded = decodeId(first.id);

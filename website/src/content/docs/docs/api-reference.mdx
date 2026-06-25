@@ -81,14 +81,13 @@ sdk.chapters(media: Media | string, opts?: {
 
 ```ts
 sdk.stream(episode: Episode | string, opts?: {
-  language?:  'sub' | 'dub' | 'raw';
-  quality?:   string;
-  adjacency?: 'within-media' | 'walk-relations'; // default: 'walk-relations'
-  signal?:    AbortSignal;
-}): Promise<Stream>
+  signal?: AbortSignal;
+}): ProgressiveResult<Stream>
 ```
 
-`adjacency: 'walk-relations'` follows SEQUEL/PREQUEL relations to populate `stream.adjacent` at season boundaries. `'within-media'` stops at the last episode.
+Returns **all streams** available for the episode — all sources, all servers, all languages — as a `ProgressiveResult<Stream>` (async-iterable or `await`able for the full array). Each `Stream` is one playable URL with `source`, `server`, `quality`, and `language` metadata; the frontend picks the preferred one.
+
+With an `Episode` object, the SDK auto-fans-out across all enabled playback sources (using internally cached media from the prior `episodes()` call). With a string ID, only the source encoded in the ID is queried.
 
 ### `sdk.pages(chapter, opts?)`
 
@@ -141,13 +140,11 @@ interface Media {
   episodeCount?: number;
   chapterCount?: number;
   description?: string;
-  catalogues: string[]; // which catalogues contributed
-  playbackSources: string[]; // which playback sources have it
+  source: string; // which source produced this record
   mappings: {
     anilist?: number;
     mal?: number;
     kitsu?: number;
-    sources?: Record<string, string>; // source id → raw media id
   };
 }
 ```
@@ -187,16 +184,13 @@ interface Score {
 ```ts
 interface Episode {
   id: string; // opaque — pass to sdk.stream()
-  mediaId: string;
   number: number;
   title?: string;
   thumbnail?: string;
   airDate?: string;
   filler?: boolean;
   recap?: boolean;
-  languages: ('sub' | 'dub' | 'raw')[];
-  qualities: ('1080p' | '720p' | '480p' | '360p' | 'auto')[];
-  source: string; // source id that produced this entry
+  languages?: ('sub' | 'dub' | 'raw')[];
 }
 ```
 
@@ -205,42 +199,33 @@ interface Episode {
 ```ts
 interface Chapter {
   id: string; // opaque — pass to sdk.pages()
-  mediaId: string;
   number: number;
   title?: string;
-  source: string;
 }
 ```
 
 ### `Stream`
 
+Each `Stream` is one playable URL. Sources that offer multiple servers or qualities return multiple `Stream` objects.
+
 ```ts
 interface Stream {
   url: string;
-  origin: { host: string; url: string; proxied: boolean };
-  isHls: boolean;
-  qualities: { label: '1080p' | '720p' | '480p' | '360p' | 'auto'; url: string }[];
+  source: string; // which source provided this stream
+  server: string; // server within the source (e.g. 'mp4upload', 'wixmp')
+  quality: '1080p' | '720p' | '480p' | '360p' | 'auto';
   language: 'sub' | 'dub' | 'raw';
-  subtitles: Subtitle[];
+  isHls: boolean;
   headers?: Record<string, string>;
-  adjacent: {
-    prev?: { id: string; number: number };
-    next?: { id: string; number: number };
-  };
+  subtitles: Subtitle[];
 }
 ```
-
-`origin.host` is the CDN hostname (never parse `url` to get it). `origin.proxied` is `true` when the server has rewritten `url` to go through `/proxy`.
 
 ### `Pages`
 
 ```ts
 interface Pages {
-  pages: { url: string; origin: { host: string }; width?: number; height?: number }[];
-  adjacent: {
-    prev?: { id: string; number: number };
-    next?: { id: string; number: number };
-  };
+  pages: { url: string; width?: number; height?: number }[];
 }
 ```
 
@@ -361,7 +346,7 @@ function downloadVideo(
 ): Promise<{ outputPath: string; fileSize: number }>;
 ```
 
-HLS streams: walks master → variant, downloads every segment (stripping PNG-disguised TS bytes), then `ffmpeg -c copy` muxes to MP4. Direct MP4 streams to disk. Tries `stream.url`, then each `stream.qualities[i].url` until one succeeds.
+HLS streams: walks master → variant, downloads every segment (stripping PNG-disguised TS bytes), then `ffmpeg -c copy` muxes to MP4. Direct MP4 streams to disk. Each `Stream` is one URL — if it fails, the caller should try the next `Stream`.
 
 ### `downloadMangaChapter(pages, outputPath, opts?)`
 

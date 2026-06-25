@@ -19,8 +19,7 @@ const FAKE_MEDIA: Media = {
   id: 'test-id',
   kind: 'anime',
   title: { preferred: 'Test Show' },
-  catalogues: ['stub'],
-  playbackSources: [],
+  source: 'stub',
   mappings: {},
 };
 
@@ -79,7 +78,7 @@ describe('Registry', () => {
     };
     reg.register(epSource);
 
-    const media: Media = { ...FAKE_MEDIA, mappings: { sources: {} } };
+    const media: Media = { ...FAKE_MEDIA, mappings: {} };
     const ranked = await reg.rankPlaybackSources(media, {});
     expect(ranked).toHaveLength(1);
     expect(ranked[0].status).toBe('incompatible');
@@ -102,8 +101,7 @@ describe('Registry', () => {
             id: encodeId({ t: 'media', s: 'play', r: 'native-id-42' }),
             kind: 'anime',
             title: { preferred: "Frieren: Beyond Journey's End" },
-            catalogues: ['play'],
-            playbackSources: ['play'],
+            source: 'play',
             mappings: {},
             year: 2023,
           },
@@ -111,8 +109,7 @@ describe('Registry', () => {
             id: encodeId({ t: 'media', s: 'play', r: 'wrong-show' }),
             kind: 'anime',
             title: { preferred: 'Totally Unrelated Show' },
-            catalogues: ['play'],
-            playbackSources: ['play'],
+            source: 'play',
             mappings: {},
             year: 2023,
           },
@@ -137,8 +134,9 @@ describe('Registry', () => {
     const resolved = await reg.resolveMediaId(media, playback, {});
     expect(resolved).toBe('native-id-42');
     expect(calls.length).toBeGreaterThan(0);
-    // Result is cached on the media for subsequent calls.
-    expect(media.mappings.sources?.play).toBe('native-id-42');
+    // Result is cached internally — subsequent calls skip the search.
+    const resolved2 = await reg.resolveMediaId(media, playback, {});
+    expect(resolved2).toBe('native-id-42');
   });
 
   it('resolveMediaId rejects fuzzy matches whose year disagrees by more than 1', async () => {
@@ -154,8 +152,7 @@ describe('Registry', () => {
             id: encodeId({ t: 'media', s: 'play', r: 'wrong-year' }),
             kind: 'anime',
             title: { preferred: 'Naruto' },
-            catalogues: ['play'],
-            playbackSources: ['play'],
+            source: 'play',
             mappings: {},
             year: 2007,
           },

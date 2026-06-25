@@ -73,8 +73,7 @@ function mapNode(m: any, sourceId: string): Media {
     episodeCount: m.episodes ?? undefined,
     chapterCount: m.chapters ?? undefined,
     description: m.description ?? undefined,
-    catalogues: [sourceId],
-    playbackSources: [],
+    source: sourceId,
     mappings: {
       anilist: m.id,
       mal: m.idMal ?? undefined,

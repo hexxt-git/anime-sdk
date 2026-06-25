@@ -32,10 +32,13 @@ describe('AllManga E2E', () => {
     expect(list.items.length).toBeGreaterThan(0);
 
     const ep1 = list.items[0];
-    const stream = await source.stream(ep1.id, { language: 'sub' });
+    const streams = await source.stream(ep1.id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    const stream = streams.find((s) => s.language === 'sub') ?? streams[0];
     expect(stream.url).toBeTruthy();
     expect(stream.isHls !== undefined).toBe(true);
-    console.log(`AllManga stream: ${stream.url.slice(0, 80)}`);
+    expect(stream.source).toBe('allmanga');
+    console.log(`AllManga stream: ${stream.url.slice(0, 80)} (${stream.language})`);
 
     const result = await captureStreamScreenshot('allmanga', streamToPayload(stream));
     expect(result.outputPath).toMatch(/screenshot_allmanga\.png$/);

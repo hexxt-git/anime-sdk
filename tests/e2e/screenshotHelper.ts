@@ -8,7 +8,7 @@ export function streamToPayload(s: Stream): IVideoPayload {
   return {
     sourceUrl: s.url,
     isHLS: s.isHls,
-    quality: (s.qualities[0]?.label ?? 'auto') as IVideoPayload['quality'],
+    quality: s.quality,
     language: s.language,
     headers: s.headers,
     subtitles: s.subtitles?.map((sub) => ({

@@ -80,8 +80,7 @@ export class MySource implements Source {
         }),
         kind: 'anime',
         title: { preferred: (card.querySelector('h3')?.textContent ?? '').trim() },
-        catalogues: [this.id],
-        playbackSources: [this.id],
+        source: this.id,
         mappings: {},
       }),
     );
@@ -98,18 +97,15 @@ export class MySource implements Source {
       items: doc.querySelectorAll('.episode-item a').map(
         (a, i): Episode => ({
           id: encodeId({ t: 'episode', s: this.id, r: a.getAttribute('href') ?? '' }),
-          mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
           number: i + 1,
           title: `Episode ${i + 1}`,
           languages: ['sub'],
-          qualities: ['auto'],
-          source: this.id,
         }),
       ),
     };
   }
 
-  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream> {
+  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream[]> {
     const { r: rawUnit } = decodeId(episodeId);
     const res = await this.http.get(`${this.baseUrl}${rawUnit}`, { signal: opts.signal });
     if (res.status !== 200) throw new Error(`Failed: ${res.status}`);
@@ -122,21 +118,22 @@ export class MySource implements Source {
     const payloads = await extractor.extract(embedUrl);
     if (payloads.length === 0) throw new Error('No streams extracted');
 
-    const p = payloads[0];
-    let host = '';
-    try {
-      host = new URL(p.sourceUrl).hostname;
-    } catch {}
-    return {
-      url: p.sourceUrl,
-      origin: { host, url: p.sourceUrl, proxied: false },
-      isHls: p.isHLS,
-      qualities: payloads.map((q) => ({ label: q.quality, url: q.sourceUrl })),
-      language: 'sub',
-      subtitles: [],
-      headers: p.headers,
-      adjacent: {},
-    };
+    return payloads.map((p): Stream => {
+      let server = this.id;
+      try {
+        server = new URL(p.sourceUrl).hostname;
+      } catch {}
+      return {
+        url: p.sourceUrl,
+        source: this.id,
+        server,
+        quality: p.quality ?? 'auto',
+        language: 'sub',
+        isHls: p.isHLS,
+        headers: p.headers,
+        subtitles: [],
+      };
+    });
   }
 }
 ```
@@ -260,7 +257,7 @@ E2E tests have a 90-second timeout and require an internet connection.
 - [ ] Sets `id`, `kinds`, `caps` as `readonly`
 - [ ] Uses `encodeId`/`decodeId` for all external IDs
 - [ ] All async methods accept `SourceCallOpts` and forward `signal`
-- [ ] `stream()` returns `Stream` with `url`, `origin`, `isHls`, `qualities`, `language`, `subtitles`, `adjacent`
+- [ ] `stream()` returns `Stream[]` — one per playable URL (per server per language). Each `Stream` must include `source: this.id`, `server`, `quality`, `language`, `url`, `isHls`, `subtitles`
 - [ ] Registered in `buildSources()` in `src/sdk.ts`
 - [ ] Added to `ALL_SOURCE_IDS` in `src/sdk.ts`
 - [ ] All imports use `.js` extension

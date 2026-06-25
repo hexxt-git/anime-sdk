@@ -216,19 +216,36 @@ export function buildRoutes(sdk: Sdk, proxyOpts?: ProxyOptions): Array<[string, 
 
     [
       'GET',
+      '/episode/:id/streams',
+      async (req, res, params) => {
+        const ac = abort(req);
+        const send = openSse(res);
+        try {
+          const result = sdk.stream(decodeURIComponent(params.id), { signal: ac.signal });
+          for await (const stream of result) {
+            send(maybeProxifyStream(req, stream));
+          }
+        } catch (e) {
+          send({ error: (e as Error).message });
+        }
+        res.end();
+      },
+    ],
+
+    [
+      'GET',
       '/episode/:id/stream',
       async (req, res, params, query) => {
         const ac = abort(req);
+        const lang = (query.get('language') ?? 'sub') as 'sub' | 'dub' | 'raw';
         try {
-          const stream = await sdk.stream(decodeURIComponent(params.id), {
-            language: (query.get('language') ?? 'sub') as 'sub' | 'dub' | 'raw',
-            quality: query.get('quality') ?? undefined,
-            adjacency: (query.get('adjacency') ?? 'walk-relations') as
-              | 'within-media'
-              | 'walk-relations',
-            signal: ac.signal,
-          });
-          json(res, 200, maybeProxifyStream(req, stream));
+          const streams = await sdk.stream(decodeURIComponent(params.id), { signal: ac.signal });
+          const pick =
+            streams.find((s) => s.language === lang) ??
+            streams.find((s) => s.language === 'sub') ??
+            streams[0];
+          if (!pick) throw new Error('No streams available');
+          json(res, 200, maybeProxifyStream(req, pick));
         } catch (e) {
           json(res, 404, { error: (e as Error).message });
         }
@@ -298,22 +315,33 @@ export function buildRoutes(sdk: Sdk, proxyOpts?: ProxyOptions): Array<[string, 
         const ac = abort(req);
         try {
           send({ type: 'progress', phase: 'resolving', detail: 'Resolving stream…' });
-          const stream = await sdk.stream(decodeURIComponent(episodeId), {
-            language,
-            signal: ac.signal,
-          });
+          const allStreams = await sdk.stream(decodeURIComponent(episodeId), { signal: ac.signal });
+          const candidates = allStreams.filter((s) => s.language === language);
+          if (candidates.length === 0)
+            candidates.push(...allStreams.filter((s) => s.language === 'sub'));
+          if (candidates.length === 0) candidates.push(...allStreams);
+          if (candidates.length === 0) throw new Error('No streams available');
 
           const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-sdk-dl-'));
           const safeId = episodeId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32);
           const filename = `${safeId}.mp4`;
           const tmpFile = path.join(tmpDir, filename);
-          try {
-            await downloadVideo(stream, tmpFile, {
-              timeoutMs: 1_200_000,
-              onProgress: ({ phase, detail }) => send({ type: 'progress', phase, detail }),
-            });
-            send({ type: 'complete', token: storePending(tmpFile, tmpDir, filename) });
-          } catch (dlErr) {
+
+          let downloaded = false;
+          for (const stream of candidates) {
+            try {
+              await downloadVideo(stream, tmpFile, {
+                timeoutMs: 1_200_000,
+                onProgress: ({ phase, detail }) => send({ type: 'progress', phase, detail }),
+              });
+              send({ type: 'complete', token: storePending(tmpFile, tmpDir, filename) });
+              downloaded = true;
+              break;
+            } catch {
+              // try next candidate
+            }
+          }
+          if (!downloaded) {
             try {
               fs.unlinkSync(tmpFile);
             } catch {
@@ -324,10 +352,7 @@ export function buildRoutes(sdk: Sdk, proxyOpts?: ProxyOptions): Array<[string, 
             } catch {
               /* ignore */
             }
-            send({
-              type: 'error',
-              message: dlErr instanceof Error ? dlErr.message : String(dlErr),
-            });
+            send({ type: 'error', message: 'All stream candidates failed to download' });
           }
         } catch (e) {
           send({ type: 'error', message: e instanceof Error ? e.message : String(e) });

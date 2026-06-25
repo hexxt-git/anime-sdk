@@ -64,8 +64,7 @@ describe('value types are plain POJOs', () => {
       id: 'opaque-id',
       kind: 'anime',
       title: { preferred: 'Frieren', english: 'Frieren' },
-      catalogues: ['anilist'],
-      playbackSources: [],
+      source: 'anilist',
       mappings: { anilist: 154587 },
     };
     expect(JSON.parse(JSON.stringify(m))).toEqual(m);
@@ -74,17 +73,14 @@ describe('value types are plain POJOs', () => {
   it('Episode round-trips through JSON', () => {
     const ep: Episode = {
       id: 'ep-id',
-      mediaId: 'media-id',
       number: 1,
       languages: ['sub'],
-      qualities: ['auto'],
-      source: 'allmanga',
     };
     expect(JSON.parse(JSON.stringify(ep))).toEqual(ep);
   });
 
   it('Chapter round-trips through JSON', () => {
-    const ch: Chapter = { id: 'ch-id', mediaId: 'm-id', number: 1, source: 'mangadex' };
+    const ch: Chapter = { id: 'ch-id', number: 1 };
     expect(JSON.parse(JSON.stringify(ch))).toEqual(ch);
   });
 

@@ -26,7 +26,12 @@ The SDK has five layers:
 
 **2. Types and errors (`src/types.ts`, `src/errors.ts`, `src/config.ts`)**: all public value types.
 
-- `Media`, `Episode`, `Chapter`, `Stream`, `Pages`, `List<T>`, `SourceInfo`, `Score` — plain POJOs, `JSON.stringify`-safe.
+- `Media` — `source: string` identifies the originating source. `mappings: { anilist?, mal?, kitsu? }` for cross-provider IDs.
+- `Episode` — `id`, `number`, `title?`, `thumbnail?`, `airDate?`, `filler?`, `recap?`, `languages?: ('sub'|'dub'|'raw')[]`.
+- `Chapter` — `id`, `number`, `title?`.
+- `Stream` — one playable URL per object: `url`, `source`, `server`, `quality` (`'1080p'|'720p'|'480p'|'360p'|'auto'`), `language`, `isHls`, `headers?`, `subtitles[]`.
+- `Pages` — `pages: { url, width?, height? }[]`.
+- `List<T>`, `SourceInfo`, `Score` — plain POJOs, `JSON.stringify`-safe.
 - `AniError extends Error` with `AniErrorCode` const enum (`SourceUnavailable`, `NoStream`, `RegionBlocked`, `RateLimited`, `NotFound`, `Cancelled`, `BadId`).
 - `SdkOptions` + `resolveOptions()`.
 
@@ -40,12 +45,15 @@ Single `Source` interface (`src/sources/base.ts`). Capability flags: `search`, `
 
 All sources use `encodeId`/`decodeId` for IDs. `stream(episodeId)` and `pages(chapterId)` decode the opaque ID to dispatch to the right source.
 
+**Stream sources return `Stream[]`** — one `Stream` per playable URL (one per server per language). Each `Stream` has `source` (which provider), `server` (which server within the provider), `quality`, and `language`. The SDK fans these out across all sources progressively.
+
 **4. Registry + SDK (`src/registry.ts`, `src/sdk.ts`, `src/progressive.ts`, `src/health.ts`)**: public API.
 
-- `Registry`: holds sources, implements `fanOutSearch` (returns `ProgressiveResult<Media>`), `mergeEpisodes`, `rankPlaybackSources`.
+- `Registry`: holds sources, `mediaCache` (auto-populated when episodes/chapters are fetched), `mappingCache` for cross-source ID resolution. Implements `fanOutSearch`, `fanOutStream`, `streamEpisode` (auto fan-out using cached media), `streamFromSource` (single source), `mergeEpisodes`, `rankPlaybackSources`.
 - `HealthTracker`: rolling 20-call success/latency window per source. Used to rank playback sources.
 - `ProgressiveResult<T>`: implements `AsyncIterable<T>` (results as they arrive) and `PromiseLike<T[]>` (collect all). `cancel()` aborts via `AbortSignal.any()`.
 - `Sdk` class: 9 verbs — `search`, `info`, `sources`, `episodes`, `chapters`, `stream`, `pages`, `browse`, `health`. Each accepts value objects or opaque id strings.
+- `sdk.stream(episode)` → `ProgressiveResult<Stream>`. With an Episode object, the SDK looks up the cached media and auto-fans-out across all stream-capable sources. With a string ID, only the source encoded in the ID is queried.
 - `createSdk(opts?)`: zero-config factory that instantiates `HttpClient` + all enabled sources + `Registry`.
 
 **5. Server (`src/server/`)**: thin consumer of the SDK.
@@ -75,7 +83,7 @@ Stateless, take an embed URL + `HttpClient`, return `IVideoPayload[]`. Used inte
 ## Tests
 
 - **Unit tests** (`tests/*.test.ts`): cover pure-logic modules — `HttpClient`, `HlsUtils`, `DomRegistry`, extractor parsing, `encodeId`/`decodeId`, rate limiter, retry policy, `ProgressiveResult`, `Registry`, `Sdk` smoke test, types/errors/config.
-- **E2E tests** (`tests/e2e/*.test.ts`): live, non-mocked. Each searches a popular title, picks an episode/chapter, resolves the stream/pages, and (for anime) runs `captureStreamScreenshot` to screenshot a real video frame. Assertion: the PNG is >1KB. A `streamToPayload()` helper converts `Stream` to `IVideoPayload` for the screenshot helper.
+- **E2E tests** (`tests/e2e/*.test.ts`): live, non-mocked. Each searches a popular title, picks an episode/chapter, resolves streams/pages, and (for anime) runs `captureStreamScreenshot` to screenshot a real video frame. Assertion: the PNG is >1KB. Each `Stream` is one playable URL; tests pick one to screenshot. A `streamToPayload()` helper converts `Stream` to `IVideoPayload` for the screenshot helper.
 
 ### Testing rules (do not negotiate)
 

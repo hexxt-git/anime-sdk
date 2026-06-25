@@ -30,9 +30,8 @@ export class MangadexSource implements Source {
           ? { url: `${COVER_BASE}/${manga.id}/${coverFileName}.256.jpg` }
           : undefined,
         year: typeof manga.attributes.year === 'number' ? manga.attributes.year : undefined,
-        catalogues: [this.id],
-        playbackSources: [this.id],
-        mappings: { sources: { [this.id]: manga.id } },
+        source: this.id,
+        mappings: {},
       };
     });
   }
@@ -54,12 +53,10 @@ export class MangadexSource implements Source {
         const num = parseFloat(ch.attributes.chapter);
         items.push({
           id: encodeId({ t: 'chapter', s: this.id, r: ch.id }),
-          mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
           number: isNaN(num) ? 0 : num,
           title: ch.attributes.title
             ? `Ch. ${ch.attributes.chapter} - ${ch.attributes.title}`
             : `Chapter ${ch.attributes.chapter}`,
-          source: this.id,
         });
       }
       offset += limit;
@@ -76,9 +73,8 @@ export class MangadexSource implements Source {
     const hash = data.chapter.hash;
     const pages = (data.chapter.data as string[]).map((file) => ({
       url: `${base}/data/${hash}/${file}`,
-      origin: { host: 'uploads.mangadex.org' },
     }));
-    return { pages, adjacent: {} };
+    return { pages };
   }
 
   async lookupByMapping(

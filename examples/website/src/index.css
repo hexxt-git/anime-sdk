@@ -30,6 +30,7 @@
 * {
   border-radius: 0 !important;
   box-sizing: border-box;
+  border-color: var(--color-base-200);
 }
 
 html,

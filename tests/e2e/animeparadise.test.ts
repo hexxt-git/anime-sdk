@@ -25,9 +25,12 @@ describe('AnimeParadise E2E', () => {
     const list = await source.episodes(decoded.r, {});
     expect(list.items.length).toBeGreaterThan(0);
 
-    const stream = await source.stream(list.items[0].id, {});
+    const streams = await source.stream(list.items[0].id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    const stream = streams[0];
     expect(stream.url).toBeTruthy();
-    console.log(`AnimeParadise stream: ${stream.url.slice(0, 80)}`);
+    expect(stream.source).toBe('animeparadise');
+    console.log(`AnimeParadise stream: ${stream.url.slice(0, 80)} (${stream.language})`);
 
     const result = await captureStreamScreenshot('animeparadise', streamToPayload(stream));
     expect(result.outputPath).toMatch(/screenshot_animeparadise\.png$/);

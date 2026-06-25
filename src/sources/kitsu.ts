@@ -42,8 +42,7 @@ function mapNode(r: any, path: 'anime' | 'manga', sourceId: string, mappings = {
     format: a.subtype ?? undefined,
     episodeCount: a.episodeCount ?? undefined,
     chapterCount: a.chapterCount ?? undefined,
-    catalogues: [sourceId],
-    playbackSources: [],
+    source: sourceId,
     mappings: { kitsu: kitsuId, ...(mappings as Record<string, unknown>) } as Media['mappings'],
   };
 }

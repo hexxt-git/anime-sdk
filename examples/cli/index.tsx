@@ -27,7 +27,7 @@ type Screen =
   | {
       type: 'stream';
       episode: Episode;
-      result: Stream | null;
+      streams: Stream[];
       loading: boolean;
       error: string | null;
     }
@@ -91,12 +91,10 @@ function App() {
   const [kind, setKind] = useState<'anime' | 'manga'>('anime');
   const [activeIdx, setActiveIdx] = useState(0);
   const [searchInput, setSearchInput] = useState('');
-  const [langIdx, setLangIdx] = useState(0);
 
   const push = useCallback((s: Screen) => {
     setScreen(s);
     setActiveIdx(0);
-    setLangIdx(0);
   }, []);
 
   // ─── Browse loader ──────────────────────────────────────────────────────────
@@ -154,17 +152,16 @@ function App() {
   useEffect(() => {
     if (screen.type !== 'stream' || !screen.loading) return;
     const ep = screen.episode;
-    const lang = ep.languages[langIdx] ?? 'sub';
     sdk
-      .stream(ep, { language: lang })
-      .then((result) =>
-        setScreen({ type: 'stream', episode: ep, result, loading: false, error: null }),
+      .stream(ep)
+      .then((streams) =>
+        setScreen({ type: 'stream', episode: ep, streams, loading: false, error: null }),
       )
       .catch((e) =>
         setScreen({
           type: 'stream',
           episode: ep,
-          result: null,
+          streams: [],
           loading: false,
           error: (e as Error).message,
         }),
@@ -227,7 +224,7 @@ function App() {
         push({
           type: 'stream',
           episode: screen.items[activeIdx],
-          result: null,
+          streams: [],
           loading: true,
           error: null,
         });
@@ -420,34 +417,29 @@ function App() {
 
       {screen.type === 'stream' && (
         <Box flexDirection="column">
-          {screen.loading && <Text color="gray">resolving stream…</Text>}
+          {screen.loading && <Text color="gray">resolving streams…</Text>}
           {screen.error && <Text color="red">{screen.error}</Text>}
-          {screen.result && (
+          {screen.streams.length > 0 && (
             <>
               <Text bold>
                 EP.{screen.episode.number} {screen.episode.title ?? ''}
               </Text>
               <Box marginTop={1} flexDirection="column">
-                <Text color="gray">
-                  [{screen.result.isHls ? 'HLS' : 'MP4'}] {screen.result.language}{' '}
-                  {screen.result.origin.host}
-                </Text>
-                <Text color="cyan" wrap="wrap">
-                  {screen.result.url}
-                </Text>
-                {screen.result.qualities.length > 1 && (
-                  <Text color="gray">
-                    qualities: {screen.result.qualities.map((q) => q.label).join(', ')}
-                  </Text>
-                )}
-                {screen.result.subtitles.length > 0 && (
-                  <Text color="gray">
-                    subtitles: {screen.result.subtitles.map((s) => s.label).join(', ')}
-                  </Text>
-                )}
-                {screen.result.adjacent.next && (
-                  <Text color="gray">next: EP.{screen.result.adjacent.next.number}</Text>
-                )}
+                {screen.streams.map((s, i) => (
+                  <Box key={i} flexDirection="column" marginBottom={1}>
+                    <Text color="gray">
+                      [{s.isHls ? 'HLS' : 'MP4'}] {s.source} · {s.language} {s.quality} {s.server}
+                    </Text>
+                    <Text color="cyan" wrap="wrap">
+                      {s.url}
+                    </Text>
+                    {s.subtitles.length > 0 && (
+                      <Text color="gray">
+                        subtitles: {s.subtitles.map((sub) => sub.label).join(', ')}
+                      </Text>
+                    )}
+                  </Box>
+                ))}
               </Box>
             </>
           )}
@@ -464,10 +456,7 @@ function App() {
               <Text bold>
                 Ch.{screen.chapter.number} {screen.chapter.title ?? ''}
               </Text>
-              <Text color="gray">
-                {screen.result.pages.length} pages origin:{' '}
-                {screen.result.pages[0]?.origin.host ?? ''}
-              </Text>
+              <Text color="gray">{screen.result.pages.length} pages</Text>
               {screen.result.pages.slice(0, 3).map((p, i) => (
                 <Text key={i} color="cyan" wrap="wrap">
                   {p.url}

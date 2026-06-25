@@ -29,36 +29,29 @@ export interface Media {
   episodeCount?: number;
   chapterCount?: number;
   description?: string;
-  catalogues: string[];
-  playbackSources: string[];
+  source: string;
   mappings: {
     anilist?: number;
     mal?: number;
     kitsu?: number;
-    sources?: Record<string, string>;
   };
 }
 
 export interface Episode {
   id: string;
-  mediaId: string;
   number: number;
   title?: string;
   thumbnail?: string;
   airDate?: string;
   filler?: boolean;
   recap?: boolean;
-  languages: ('sub' | 'dub' | 'raw')[];
-  qualities: ('1080p' | '720p' | '480p' | '360p' | 'auto')[];
-  source: string;
+  languages?: ('sub' | 'dub' | 'raw')[];
 }
 
 export interface Chapter {
   id: string;
-  mediaId: string;
   number: number;
   title?: string;
-  source: string;
 }
 
 export interface Subtitle {
@@ -70,24 +63,17 @@ export interface Subtitle {
 
 export interface Stream {
   url: string;
-  origin: { host: string; url: string; proxied: boolean };
-  isHls: boolean;
-  qualities: { label: '1080p' | '720p' | '480p' | '360p' | 'auto'; url: string }[];
+  source: string;
+  server: string;
+  quality: '1080p' | '720p' | '480p' | '360p' | 'auto';
   language: 'sub' | 'dub' | 'raw';
-  subtitles: Subtitle[];
+  isHls: boolean;
   headers?: Record<string, string>;
-  adjacent: {
-    prev?: { id: string; number: number };
-    next?: { id: string; number: number };
-  };
+  subtitles: Subtitle[];
 }
 
 export interface Pages {
-  pages: { url: string; origin: { host: string }; width?: number; height?: number }[];
-  adjacent: {
-    prev?: { id: string; number: number };
-    next?: { id: string; number: number };
-  };
+  pages: { url: string; width?: number; height?: number }[];
 }
 
 export interface List<T> {

@@ -6,3 +6,4 @@ references/
 *.log
 scratch
 examples/website/tsconfig.tsbuildinfo
+*.tsbuildinfo

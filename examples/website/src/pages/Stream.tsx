@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import Hls from 'hls.js';
 import * as api from '../api';
 import { Combobox } from '../components/ui/Select';
@@ -254,93 +253,67 @@ export default function Stream() {
   const title = sp.get('title') || '';
   const mediaId = sp.get('mid') || '';
 
-  // Languages threaded from Episodes.tsx — defaults to ['sub'] when missing
-  // (e.g. opened via a direct link).
-  const langsParam = sp.get('langs');
-  const availableLangs: api.Language[] = langsParam
-    ? (langsParam
-        .split(',')
-        .filter((l) => l === 'sub' || l === 'dub' || l === 'raw') as api.Language[])
-    : ['sub'];
-
   const isManga = !!chapterId;
-  const [lang, setLang] = useState<api.Language>(availableLangs[0] ?? 'sub');
-  const [activeQuality, setActiveQuality] = useState<string | null>(null); // label, e.g. '1080p'
 
-  const {
-    data: streamData,
-    isFetching: streamFetching,
-    isError: streamError,
-    error: streamErr,
-  } = useQuery<api.Stream>({
-    queryKey: ['stream', episodeId, lang],
-    queryFn: () => api.episodeStream(episodeId, lang),
-    enabled: !!episodeId,
-    // Stream URLs carry signed expiries; never serve stale data, and don't
-    // keep the resolved URL hanging around in cache after the player unmounts.
-    staleTime: 0,
-    gcTime: 30_000,
-    retry: 0,
-  });
+  // Progressive streams — arrive from all sources as SSE events
+  const [streams, setStreams] = useState<api.Stream[]>([]);
+  const [streamsLoading, setStreamsLoading] = useState(false);
+  const [streamsError, setStreamsError] = useState<string | null>(null);
+  const [activeIdx, setActiveIdx] = useState<number | null>(null);
 
-  const {
-    data: pagesData,
-    isFetching: pagesFetching,
-    isError: pagesError,
-    error: pagesErr,
-  } = useQuery<api.Pages>({
-    queryKey: ['pages', chapterId],
-    queryFn: () => api.chapterPages(chapterId),
-    enabled: !!chapterId,
-    staleTime: 0,
-    gcTime: 30_000,
-    retry: 0,
-  });
+  const subStreams = streams.filter((s) => s.language === 'sub');
+  const dubStreams = streams.filter((s) => s.language === 'dub');
+  const rawStreams = streams.filter((s) => s.language === 'raw');
+  const activeStream = activeIdx != null ? streams[activeIdx] : (subStreams[0] ?? streams[0]);
 
-  // Reset quality selection when stream changes.
+  // Reset when episode changes
   useEffect(() => {
-    setActiveQuality(null);
-  }, [streamData?.url]);
+    if (!episodeId) return;
+    setStreams([]);
+    setStreamsLoading(true);
+    setStreamsError(null);
+    setActiveIdx(null);
 
-  const isFetching = streamFetching || pagesFetching;
-  const isError = streamError || pagesError;
-  const error = streamErr || pagesErr;
+    const handle = api.episodeStreams(
+      episodeId,
+      mediaId || undefined,
+      (s) => {
+        setStreams((prev) => [...prev, s]);
+      },
+      () => setStreamsLoading(false),
+      (e) => {
+        setStreamsError(e);
+        setStreamsLoading(false);
+      },
+    );
+    return () => handle.close();
+  }, [episodeId, mediaId]);
 
-  const goAdjacent = (adj: { id: string; number: number }) => {
-    if (isManga) {
-      navigate(
-        `/stream?chid=${encodeURIComponent(adj.id)}&title=${encodeURIComponent(title)}&mid=${encodeURIComponent(mediaId)}`,
-      );
-    } else {
-      const params = new URLSearchParams({
-        epid: adj.id,
-        title,
-        mid: mediaId,
-      });
-      if (langsParam) params.set('langs', langsParam);
-      navigate(`/stream?${params.toString()}`);
-    }
-  };
+  const [pagesData, setPagesData] = useState<api.Pages | null>(null);
+  const [pagesFetching, setPagesFetching] = useState(false);
+  const [pagesError, setPagesError] = useState<string | null>(null);
 
-  const adjacent = streamData?.adjacent ?? pagesData?.adjacent;
-  const prev = adjacent?.prev;
-  const next = adjacent?.next;
-
-  // Active playable URL — quality switch is client-side: pick from stream.qualities[].
-  const activePick = streamData
-    ? (streamData.qualities.find((q) => q.label === activeQuality) ?? {
-        label: 'auto' as const,
-        url: streamData.url,
+  useEffect(() => {
+    if (!chapterId) return;
+    setPagesFetching(true);
+    api
+      .chapterPages(chapterId)
+      .then((p) => {
+        setPagesData(p);
+        setPagesFetching(false);
       })
-    : null;
-  const activeUrl = activePick?.url ?? streamData?.url ?? '';
-  // HLS-ness of the active URL: if the selected variant has a different URL,
-  // re-detect from the extension. Saves a separate isHls per quality.
-  const activeIsHls = streamData
-    ? activePick && activePick.url !== streamData.url
-      ? /\.m3u8(\?|$)/i.test(activePick.url)
-      : streamData.isHls
-    : false;
+      .catch((e) => {
+        setPagesError(String(e));
+        setPagesFetching(false);
+      });
+  }, [chapterId]);
+
+  const activeUrl = activeStream?.url ?? '';
+  const activeIsHls = activeStream?.isHls ?? false;
+
+  const isFetching = streamsLoading || pagesFetching;
+  const isError = !!streamsError || !!pagesError;
+  const error = streamsError || pagesError;
 
   const filename = `${(title || 'episode').replace(/[^a-z0-9_-]+/gi, '_').slice(0, 40)}_${
     isManga ? 'chapter' : 'episode'
@@ -360,21 +333,21 @@ export default function Stream() {
       )}
 
       <div className="mt-5">
-        {isFetching && (
+        {isFetching && !activeStream && (
           <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
             <p className="text-base-350 text-xs tracking-widest">
-              resolving {isManga ? 'pages' : 'stream'}...
+              resolving {isManga ? 'pages' : 'streams'}...
             </p>
           </div>
         )}
-        {isError && (
+        {isError && !activeStream && (
           <div className="border-base-200 bg-base-100 flex aspect-video items-center justify-center border">
             <p className="text-xs text-red-900">{String(error)}</p>
           </div>
         )}
 
-        {streamData && (
-          <Player key={activeUrl} stream={streamData} activeUrl={activeUrl} isHls={activeIsHls} />
+        {activeStream && (
+          <Player key={activeUrl} stream={activeStream} activeUrl={activeUrl} isHls={activeIsHls} />
         )}
 
         {/* Manga chapter controls live above the reader so they aren't
@@ -393,79 +366,64 @@ export default function Stream() {
         {pagesData && <MangaReader pages={pagesData} />}
       </div>
 
-      {/* Stream controls: language + quality + download */}
-      {streamData && (
-        <div className="border-base-200 mt-2 flex flex-wrap items-center gap-x-6 gap-y-2 border-t px-1 py-2">
-          {availableLangs.length > 1 && (
-            <div className="flex items-center gap-2">
-              <span className="text-base-400 text-[10px] tracking-widest">LANG</span>
-              {availableLangs.map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLang(l)}
-                  className={`text-xs tracking-widest uppercase transition-colors ${
-                    lang === l ? 'text-base-900' : 'text-base-400 hover:text-base-700'
-                  }`}
-                >
-                  {l}
-                </button>
-              ))}
+      {/* Stream picker: one row per language */}
+      {streams.length > 0 && (
+        <div className="border-base-100 mt-2 divide-y border-t">
+          {(
+            [
+              { label: 'SUB', rows: subStreams },
+              { label: 'DUB', rows: dubStreams },
+              { label: 'RAW', rows: rawStreams },
+            ] as const
+          ).map(({ label, rows }) =>
+            rows.length === 0 ? null : (
+              <div key={label} className="flex items-center gap-4 px-1 py-2">
+                <span className="text-base-300 w-8 shrink-0 text-[10px] tracking-widest">
+                  {label}
+                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  {rows.map((s, i) => {
+                    const idx = streams.indexOf(s);
+                    const active = s === activeStream;
+                    return (
+                      <button
+                        key={`${s.source}-${s.server}-${i}`}
+                        onClick={() => setActiveIdx(idx)}
+                        className={`text-xs tracking-widest uppercase transition-colors ${
+                          active ? 'text-base-900' : 'text-base-400 hover:text-base-600'
+                        }`}
+                      >
+                        {s.source}·{s.server} {s.quality !== 'auto' ? s.quality : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ),
+          )}
+
+          {activeStream && (
+            <div className="flex flex-wrap items-center gap-4 px-1 py-2">
+              <div className="text-base-350 text-[10px]">
+                {activeStream.source} · {activeStream.server} · {activeStream.quality}
+              </div>
+              <div className="ml-auto">
+                <VideoDownloadButton
+                  episodeId={episodeId}
+                  language={activeStream.language}
+                  filename={filename}
+                />
+              </div>
             </div>
           )}
 
-          {streamData.qualities.length > 1 && (
-            <div className="flex items-center gap-2">
-              <span className="text-base-400 text-[10px] tracking-widest">QUALITY</span>
-              {streamData.qualities.map((q) => (
-                <button
-                  key={q.label}
-                  onClick={() => setActiveQuality(q.label)}
-                  className={`text-xs tracking-widest uppercase transition-colors ${
-                    (activeQuality ?? streamData.qualities[0].label) === q.label
-                      ? 'text-base-900'
-                      : 'text-base-400 hover:text-base-700'
-                  }`}
-                >
-                  {q.label}
-                </button>
-              ))}
+          {streamsLoading && (
+            <div className="px-1 py-1">
+              <span className="text-base-300 text-[10px] tracking-widest">loading…</span>
             </div>
           )}
-
-          <div className="ml-auto">
-            <VideoDownloadButton episodeId={episodeId} language={lang} filename={filename} />
-          </div>
         </div>
       )}
-
-      {/* Origin info */}
-      {streamData && (
-        <div className="border-base-200 text-base-350 mt-0 flex items-center gap-2 border-t px-1 py-2 text-[10px]">
-          <span>SOURCE</span>
-          <span className="text-base-400">{streamData.origin.host}</span>
-          {streamData.origin.proxied && <span className="text-base-300">· proxied</span>}
-        </div>
-      )}
-
-      {/* Prev / Next navigation from adjacent */}
-      <div className="border-base-200 mt-2 mb-0 border-t">
-        <div className="flex items-center justify-end gap-3 px-1 py-2">
-          <button
-            disabled={!prev}
-            onClick={() => prev && goAdjacent(prev)}
-            className="text-base-400 hover:text-base-700 disabled:text-base-300 text-xs transition-colors disabled:cursor-default"
-          >
-            ← PREV {prev ? `(${isManga ? 'Ch' : 'EP'} ${prev.number})` : ''}
-          </button>
-          <button
-            disabled={!next}
-            onClick={() => next && goAdjacent(next)}
-            className="text-base-400 hover:text-base-700 disabled:text-base-300 text-xs transition-colors disabled:cursor-default"
-          >
-            NEXT {next ? `(${isManga ? 'Ch' : 'EP'} ${next.number})` : ''} →
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

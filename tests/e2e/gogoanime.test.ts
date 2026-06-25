@@ -23,10 +23,12 @@ describe('GogoAnime E2E', () => {
     const list = await source.episodes(decoded.r, {});
     expect(list.items.length).toBeGreaterThan(0);
 
-    const epDecoded = decodeId(list.items[0].id);
-    const stream = await source.stream(list.items[0].id, {});
+    const streams = await source.stream(list.items[0].id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    const stream = streams[0];
     expect(stream.url).toBeTruthy();
-    console.log(`GogoAnime stream: ${stream.url.slice(0, 80)}`);
+    expect(stream.source).toBe('gogoanime');
+    console.log(`GogoAnime stream: ${stream.url.slice(0, 80)} (${stream.language})`);
 
     const result = await captureStreamScreenshot('gogoanime', streamToPayload(stream));
     expect(result.outputPath).toMatch(/screenshot_gogoanime\.png$/);

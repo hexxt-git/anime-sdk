@@ -29,35 +29,20 @@ function mapQuality(label: string): IVideoPayload['quality'] {
   return 'auto';
 }
 
-function qualityScore(p: IVideoPayload): number {
-  let s = 0;
-  if (/\/video\.mp4(?:[?#]|$)/.test(p.sourceUrl)) s += 30;
-  if (p.sourceUrl.includes('wixstatic.com')) s += 25;
-  if (p.sourceUrl.includes('mp4upload.com')) s += 20;
-  if (/\.m3u8(?:[?#]|$)/.test(p.sourceUrl)) s += 15;
-  if (/\.mp4(?:[?#]|$)/.test(p.sourceUrl)) s += 10;
-  if (p.quality === '1080p') s += 4;
-  else if (p.quality === '720p') s += 3;
-  else if (p.quality === '480p') s += 2;
-  else if (p.quality === '360p') s += 1;
-  return s;
-}
-
-function payloadsToStream(payloads: IVideoPayload[], lang: 'sub' | 'dub' | 'raw'): Stream {
-  payloads.sort((a, b) => qualityScore(b) - qualityScore(a));
-  const primary = payloads[0];
-  const url = primary.sourceUrl;
-  let host = '';
+function payloadToStream(p: IVideoPayload, lang: 'sub' | 'dub' | 'raw', sourceId: string): Stream {
+  let server = sourceId;
   try {
-    host = new URL(url).hostname;
+    server = new URL(p.sourceUrl).hostname;
   } catch {}
   return {
-    url,
-    origin: { host, url, proxied: false },
-    isHls: primary.isHLS,
-    qualities: payloads.map((p) => ({ label: p.quality, url: p.sourceUrl })),
+    url: p.sourceUrl,
+    source: sourceId,
+    server,
+    quality: p.quality,
     language: lang,
-    subtitles: (primary.subtitles ?? []).map(
+    isHls: p.isHLS,
+    headers: p.headers,
+    subtitles: (p.subtitles ?? []).map(
       (s): Subtitle => ({
         url: s.url,
         language: s.language,
@@ -65,8 +50,6 @@ function payloadsToStream(payloads: IVideoPayload[], lang: 'sub' | 'dub' | 'raw'
         format: s.format ?? 'vtt',
       }),
     ),
-    headers: primary.headers,
-    adjacent: {},
   };
 }
 
@@ -131,9 +114,8 @@ export class AllmangaSource implements Source {
           id: encodeId({ t: 'media', s: this.id, r: e._id }),
           kind: 'anime',
           title: { preferred: title },
-          catalogues: [this.id],
-          playbackSources: [this.id],
-          mappings: { sources: { [this.id]: e._id } },
+          source: this.id,
+          mappings: {},
         };
       });
   }
@@ -168,43 +150,39 @@ export class AllmangaSource implements Source {
     for (const [epStr, { num, langs }] of merged) {
       items.push({
         id: encodeId({ t: 'episode', s: this.id, r: `${mediaId}/${epStr}` }),
-        mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
         number: num,
         title: `Episode ${epStr}`,
         languages: langs,
-        qualities: ['auto'],
-        source: this.id,
       });
     }
     items.sort((a, b) => a.number - b.number);
     return { items };
   }
 
-  async stream(
-    episodeId: string,
-    opts: SourceCallOpts & { language?: 'sub' | 'dub' | 'raw' },
-  ): Promise<Stream> {
+  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream[]> {
     const { r: rawUnit } = decodeId(episodeId);
     const [showId, episodeString] = rawUnit.split('/');
     if (!showId || !episodeString) throw new Error(`Invalid AllManga episode id: ${rawUnit}`);
-    const lang = opts.language ?? 'sub';
-    const sources = await this.fetchEpisodeSources(showId, episodeString, lang, opts.signal);
-    if (sources.length === 0) throw new Error(`AllManga: no sources for ${rawUnit}`);
-    sources.sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0));
 
-    const payloads: IVideoPayload[] = [];
-    const errors: string[] = [];
-    for (const src of sources) {
-      try {
-        payloads.push(...(await this.extractSource(src, lang)));
-      } catch (e) {
-        errors.push(`${src.sourceName}: ${(e as Error).message}`);
-      }
-    }
-    if (payloads.length === 0) {
-      throw new Error(`AllManga: no playable streams for ${rawUnit}. Errors: ${errors.join('; ')}`);
-    }
-    return payloadsToStream(payloads, lang);
+    const results = await Promise.allSettled(
+      (['sub', 'dub', 'raw'] as const).map(async (lang) => {
+        const sources = await this.fetchEpisodeSources(showId, episodeString, lang, opts.signal);
+        if (sources.length === 0) throw new Error(`no sources for ${lang}`);
+        sources.sort((a, b) => (Number(b.priority) || 0) - (Number(a.priority) || 0));
+        const payloads: IVideoPayload[] = [];
+        for (const src of sources) {
+          try {
+            payloads.push(...(await this.extractSource(src, lang)));
+          } catch {}
+        }
+        if (payloads.length === 0) throw new Error(`no playable streams for ${lang}`);
+        return payloads.map((p) => payloadToStream(p, lang, this.id));
+      }),
+    );
+
+    const streams = results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
+    if (streams.length === 0) throw new Error(`AllManga: no playable streams for ${rawUnit}`);
+    return streams;
   }
 
   async lookupByMapping(

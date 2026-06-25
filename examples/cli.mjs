@@ -61,25 +61,20 @@ if (kind === 'manga') {
   const ei = await pick(
     episodes.map(
       (e) =>
-        `EP.${String(e.number).padStart(3, '0')}  ${e.title ?? ''}  (${e.languages.join('/')})`,
+        `EP.${String(e.number).padStart(3, '0')}  ${e.title ?? ''}  (${(e.languages ?? ['sub']).join('/')})`,
     ),
     'Select episode',
   );
   const episode = episodes[ei];
-  const lang = episode.languages[0] ?? 'sub';
   process.stdout.write('...\n');
-  const stream = await sdk.stream(episode, { language: lang });
+  const streams = await sdk.stream(episode);
 
-  console.log('\n─── STREAM ───');
-  console.log(
-    `[${stream.isHls ? 'HLS' : 'MP4'}] ${stream.language}  origin: ${stream.origin.host}`,
-  );
-  console.log(stream.url);
-  if (stream.qualities.length > 1) {
-    console.log('qualities:', stream.qualities.map((q) => q.label).join(', '));
-  }
-  if (stream.adjacent.next) {
-    console.log(`next: EP.${stream.adjacent.next.number}`);
+  console.log(`\n─── STREAMS (${streams.length}) ───`);
+  for (const s of streams) {
+    console.log(
+      `[${s.isHls ? 'HLS' : 'MP4'}] ${s.language} ${s.quality}  server: ${s.server}  source: ${s.source}`,
+    );
+    console.log(`  ${s.url}`);
   }
 }
 

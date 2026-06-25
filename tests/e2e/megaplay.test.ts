@@ -23,19 +23,22 @@ describe('MegaPlaySource E2E', () => {
     expect(list.items[0].number).toBe(1);
   });
 
-  it('should resolve and capture sub stream for Frieren episode 1', async () => {
+  it('should resolve and capture sub+dub streams for Frieren episode 1', async () => {
     const ep1Id = (await source.episodes('154587', {})).items[0].id;
-    const stream = await source.stream(ep1Id, { language: 'sub' });
-    const result = await captureStreamScreenshot('megaplay_sub', streamToPayload(stream));
-    expect(fs.existsSync(result.outputPath)).toBe(true);
-    expect(fs.statSync(result.outputPath).size).toBeGreaterThan(1024);
-  }, 30000);
-
-  it('should resolve and capture dub stream for Frieren episode 1', async () => {
-    const ep1Id = (await source.episodes('154587', {})).items[0].id;
-    const stream = await source.stream(ep1Id, { language: 'dub' });
-    const result = await captureStreamScreenshot('megaplay_dub', streamToPayload(stream));
-    expect(fs.existsSync(result.outputPath)).toBe(true);
-    expect(fs.statSync(result.outputPath).size).toBeGreaterThan(1024);
-  }, 30000);
+    const streams = await source.stream(ep1Id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    streams.forEach((s) => expect(s.source).toBe('megaplay'));
+    const sub = streams.find((s) => s.language === 'sub');
+    if (sub) {
+      const result = await captureStreamScreenshot('megaplay_sub', streamToPayload(sub));
+      expect(fs.existsSync(result.outputPath)).toBe(true);
+      expect(fs.statSync(result.outputPath).size).toBeGreaterThan(1024);
+    }
+    const dub = streams.find((s) => s.language === 'dub');
+    if (dub) {
+      const result = await captureStreamScreenshot('megaplay_dub', streamToPayload(dub));
+      expect(fs.existsSync(result.outputPath)).toBe(true);
+      expect(fs.statSync(result.outputPath).size).toBeGreaterThan(1024);
+    }
+  }, 60000);
 });

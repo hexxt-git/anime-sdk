@@ -30,11 +30,13 @@ const results = await sdk.search('Frieren', { kind: 'anime' });
 // 2. Episodes
 const { items: episodes } = await sdk.episodes(results[0]);
 
-// 3. Stream
-const stream = await sdk.stream(episodes[0], { language: 'sub' });
-console.log(stream.url); // playable URL
-console.log(stream.origin.host); // CDN hostname
-console.log(stream.adjacent.next); // next episode { id, number }
+// 3. Stream — all available streams from all sources, all languages
+const streams = await sdk.stream(episodes[0]);
+// Each Stream is one playable URL with .source, .server, .quality, .language
+const preferred = streams.find((s) => s.language === 'sub') ?? streams[0];
+console.log(preferred.url); // playable URL
+console.log(preferred.source); // which source provided this stream
+console.log(preferred.server); // server name within the source
 ```
 
 Manga works the same way — no language argument:
@@ -58,31 +60,26 @@ interface Media {
   cover?: { url: string; color?: string };
   score?: { value: number; scale: number }; // { value: 87, scale: 100 } → 8.7
   year?: number;
+  source: string;
   mappings: { anilist?: number; mal?: number; kitsu?: number };
 }
 
 interface Episode {
   id: string; // opaque
-  mediaId: string;
   number: number;
   title?: string;
-  languages: ('sub' | 'dub' | 'raw')[];
-  qualities: ('1080p' | '720p' | '480p' | '360p' | 'auto')[];
-  source: string;
+  languages?: ('sub' | 'dub' | 'raw')[];
 }
 
 interface Stream {
   url: string;
-  origin: { host: string; url: string; proxied: boolean };
-  isHls: boolean;
-  qualities: { label: string; url: string }[];
+  source: string;
+  server: string;
+  quality: '1080p' | '720p' | '480p' | '360p' | 'auto';
   language: 'sub' | 'dub' | 'raw';
-  subtitles: { url: string; language: string; label: string; format: 'vtt' | 'srt' | 'ass' }[];
+  isHls: boolean;
   headers?: Record<string, string>;
-  adjacent: {
-    prev?: { id: string; number: number };
-    next?: { id: string; number: number };
-  };
+  subtitles: { url: string; language: string; label: string; format: 'vtt' | 'srt' | 'ass' }[];
 }
 ```
 
@@ -136,7 +133,7 @@ const all = await sdk.search('Frieren', { kind: 'anime' });
 import { AniError, AniErrorCode } from 'anime-sdk';
 
 try {
-  const stream = await sdk.stream(episode);
+  const streams = await sdk.stream(episode);
 } catch (e) {
   if (e instanceof AniError) {
     switch (e.code) {
@@ -183,7 +180,8 @@ All fields optional. `createSdk()` with no args works out of the box.
 ```ts
 import { downloadVideo, downloadMangaChapter } from 'anime-sdk';
 
-const stream = await sdk.stream(episode, { language: 'sub' });
+const streams = await sdk.stream(episode);
+const stream = streams.find((s) => s.language === 'sub') ?? streams[0];
 await downloadVideo(stream, './episode-1.mp4');
 
 const pages = await sdk.pages(chapter);

@@ -100,83 +100,55 @@ function mergeHeaders(extra?: Record<string, string>): Record<string, string> {
 
 // ─── Video Download ─────────────────────────────────────────────────────────
 
-/**
- * Download an episode `Stream` to an `.mp4` file. Tries `stream.url` first,
- * then walks `stream.qualities` from highest to lowest. HLS streams are
- * muxed via ffmpeg; direct MP4 streams are streamed to disk.
- */
 export async function downloadVideo(
   stream: Stream,
   outputPath: string,
   options?: DownloadVideoOptions,
 ): Promise<DownloadVideoResult> {
   const headers = options?.headers ?? stream.headers ?? {};
-  const candidates: { url: string; isHls: boolean }[] = [];
-  candidates.push({ url: stream.url, isHls: stream.isHls });
-  for (const q of stream.qualities ?? []) {
-    if (q.url !== stream.url) {
-      candidates.push({ url: q.url, isHls: /\.m3u8(\?|$)/i.test(q.url) });
-    }
-  }
-
-  if (candidates.length === 0) throw new Error('downloadVideo: stream has no playable URLs');
 
   const dir = path.dirname(outputPath);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
   const timeout = options?.timeoutMs ?? 300_000;
-  const errors: string[] = [];
 
-  for (let i = 0; i < candidates.length; i++) {
-    const { url, isHls } = candidates[i];
-    options?.onProgress?.({
-      phase: 'resolving',
-      detail: `Trying candidate ${i + 1}/${candidates.length}: ${url.slice(0, 120)}`,
-    });
+  let target = stream.url;
+  let hls = stream.isHls;
 
-    try {
-      let target = url;
-      let hls = isHls;
-
-      if (!hls && !target.includes('.m3u8') && !target.includes('.mp4')) {
-        const probed = await probeIsVideo(target, headers);
-        if (!probed.isVideo) {
-          const scraped = await scrapeForStreamUrl(target, headers);
-          if (scraped) {
-            target = scraped.url;
-            hls = scraped.isHls;
-          }
-        }
+  if (!hls && !target.includes('.m3u8') && !target.includes('.mp4')) {
+    const probed = await probeIsVideo(target, headers);
+    if (!probed.isVideo) {
+      const scraped = await scrapeForStreamUrl(target, headers);
+      if (scraped) {
+        target = scraped.url;
+        hls = scraped.isHls;
       }
-
-      if (hls || target.includes('.m3u8')) {
-        options?.onProgress?.({
-          phase: 'downloading',
-          detail: 'Downloading HLS segments',
-        });
-        await downloadHlsSegments(target, outputPath, headers, timeout, options?.onProgress);
-      } else {
-        options?.onProgress?.({ phase: 'downloading', detail: 'Downloading MP4 directly' });
-        await downloadMp4Direct(target, outputPath, headers, timeout);
-      }
-
-      const stat = fs.statSync(outputPath);
-      if (stat.size < 1024) {
-        throw new Error(`Downloaded file is too small (${stat.size} bytes)`);
-      }
-
-      options?.onProgress?.({ phase: 'complete', detail: outputPath });
-      return { outputPath, fileSize: stat.size };
-    } catch (e) {
-      const msg = (e as Error).message;
-      errors.push(`#${i + 1} (${url.slice(0, 60)}…): ${msg}`);
     }
   }
 
-  throw new Error(
-    `downloadVideo exhausted all ${candidates.length} candidate(s).\n` +
-      errors.map((e) => `  - ${e}`).join('\n'),
-  );
+  options?.onProgress?.({
+    phase: 'resolving',
+    detail: `Downloading: ${target.slice(0, 120)}`,
+  });
+
+  if (hls || target.includes('.m3u8')) {
+    options?.onProgress?.({
+      phase: 'downloading',
+      detail: 'Downloading HLS segments',
+    });
+    await downloadHlsSegments(target, outputPath, headers, timeout, options?.onProgress);
+  } else {
+    options?.onProgress?.({ phase: 'downloading', detail: 'Downloading MP4 directly' });
+    await downloadMp4Direct(target, outputPath, headers, timeout);
+  }
+
+  const stat = fs.statSync(outputPath);
+  if (stat.size < 1024) {
+    throw new Error(`Downloaded file is too small (${stat.size} bytes)`);
+  }
+
+  options?.onProgress?.({ phase: 'complete', detail: outputPath });
+  return { outputPath, fileSize: stat.size };
 }
 
 async function probeIsVideo(

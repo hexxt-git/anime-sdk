@@ -34,14 +34,7 @@ export interface Source {
     opts: SourceCallOpts & { cursor?: string; limit?: number },
   ): Promise<List<Chapter>>;
 
-  stream?(
-    episodeId: string,
-    opts: SourceCallOpts & {
-      language?: 'sub' | 'dub' | 'raw';
-      quality?: string;
-      adjacency?: 'within-media' | 'walk-relations';
-    },
-  ): Promise<Stream>;
+  stream?(episodeId: string, opts: SourceCallOpts): Promise<Stream[]>;
 
   pages?(chapterId: string, opts: SourceCallOpts): Promise<Pages>;
 

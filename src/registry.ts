@@ -1,24 +1,24 @@
 import type { Source, SourceCallOpts } from './sources/base.js';
-import type { Media, Episode, Chapter, List, SourceInfo } from './types.js';
+import type { Media, Episode, Chapter, Stream, List, SourceInfo } from './types.js';
 import { HealthTracker } from './health.js';
 import { createProgressiveResult, type ProgressiveResult } from './progressive.js';
 import { bestSimilarity } from './internal/similarity.js';
 import { decodeId } from './internal/id.js';
 
-/**
- * Minimum normalized similarity required for a fuzzy title match to count
- * as a valid cross-source resolution. Tuned empirically: 0.7 keeps obvious
- * matches ("Frieren" → "Frieren: Beyond Journey's End") and rejects unrelated
- * titles whose tokens partially overlap.
- */
 const TITLE_MATCH_THRESHOLD = 0.7;
 
 export class Registry {
   private sources: Source[] = [];
   private health = new HealthTracker();
+  private mediaCache = new Map<string, Media>();
+  private mappingCache = new Map<string, Map<string, string>>();
 
   register(...sources: Source[]): void {
     this.sources.push(...sources);
+  }
+
+  cacheMedia(media: Media): void {
+    this.mediaCache.set(media.id, media);
   }
 
   sourcesFor(kind: 'anime' | 'manga', cap: keyof Source['caps']): Source[] {
@@ -53,6 +53,7 @@ export class Registry {
     media: Media,
     opts: SourceCallOpts & { cursor?: string; limit?: number },
   ): Promise<List<Episode>> {
+    this.cacheMedia(media);
     const kind = media.kind;
     const sources = this.sourcesFor(kind, 'episodes');
     if (sources.length === 0) return { items: [] };
@@ -77,6 +78,7 @@ export class Registry {
     media: Media,
     opts: SourceCallOpts & { cursor?: string; limit?: number },
   ): Promise<List<Chapter>> {
+    this.cacheMedia(media);
     const kind = media.kind;
     const sources = this.sourcesFor(kind, 'chapters');
     if (sources.length === 0) return { items: [] };
@@ -97,12 +99,90 @@ export class Registry {
     return { items: [] };
   }
 
+  streamFromSource(episodeId: string, opts: SourceCallOpts): ProgressiveResult<Stream> {
+    const decoded = decodeId(episodeId);
+    const allStreamSources = this.sources.filter((s) => s.caps.stream);
+    const src = allStreamSources.find((s) => s.id === decoded.s);
+    if (!src?.stream) {
+      return createProgressiveResult<Stream>(
+        [
+          async () => {
+            throw new Error(`No stream-capable source for id: ${episodeId}`);
+          },
+        ],
+        opts.signal,
+      );
+    }
+    return createProgressiveResult<Stream>(
+      [
+        async (push, signal) => {
+          const t0 = Date.now();
+          try {
+            const streams = await src.stream!(episodeId, { signal });
+            this.health.record(src.id, true, Date.now() - t0);
+            for (const s of streams) push(s);
+          } catch (e) {
+            this.health.record(src.id, false, Date.now() - t0);
+            throw e;
+          }
+        },
+      ],
+      opts.signal,
+    );
+  }
+
+  streamEpisode(episode: Episode, opts: SourceCallOpts): ProgressiveResult<Stream> {
+    const decoded = decodeId(episode.id);
+    const allStreamSources = this.sources.filter((s) => s.caps.stream);
+    const primarySrc = allStreamSources.find((s) => s.id === decoded.s);
+    const otherSrcs = allStreamSources.filter((s) => s.id !== decoded.s);
+
+    const mediaId = decoded.m?.mediaId as string | undefined;
+    const media = mediaId ? this.mediaCache.get(mediaId) : this.findCachedMediaForEpisode(episode);
+
+    const producers = [];
+
+    if (primarySrc?.stream) {
+      producers.push(async (push: (item: Stream) => void, signal: AbortSignal) => {
+        const t0 = Date.now();
+        try {
+          const streams = await primarySrc.stream!(episode.id, { signal });
+          this.health.record(primarySrc.id, true, Date.now() - t0);
+          for (const s of streams) push(s);
+        } catch (e) {
+          this.health.record(primarySrc.id, false, Date.now() - t0);
+          throw e;
+        }
+      });
+    }
+
+    if (media) {
+      for (const src of otherSrcs) {
+        producers.push(async (push: (item: Stream) => void, signal: AbortSignal) => {
+          const resolvedId = await this.resolveMediaId(media, src, { signal }).catch(() => null);
+          if (!resolvedId) return;
+          const epList = await src.episodes!(resolvedId, { signal }).catch(() => null);
+          if (!epList) return;
+          const ep = epList.items.find((e) => e.number === episode.number);
+          if (!ep) return;
+          const t0 = Date.now();
+          try {
+            const streams = await src.stream!(ep.id, { signal });
+            this.health.record(src.id, true, Date.now() - t0);
+            for (const s of streams) push(s);
+          } catch (e) {
+            this.health.record(src.id, false, Date.now() - t0);
+          }
+        });
+      }
+    }
+
+    return createProgressiveResult<Stream>(producers, opts.signal);
+  }
+
   async rankPlaybackSources(media: Media, opts: SourceCallOpts): Promise<SourceInfo[]> {
     const kind = media.kind;
     const sources = this.sourcesFor(kind, 'episodes').concat(this.sourcesFor(kind, 'chapters'));
-    // Parallel — each source may need a network search via the title-search
-    // fallback, so a sequential loop would block the user on every uncached
-    // source in turn.
     return Promise.all(
       sources.map(async (src): Promise<SourceInfo> => {
         const h = this.health.get(src.id);
@@ -120,24 +200,21 @@ export class Registry {
     return this.health;
   }
 
-  /**
-   * Resolve the playback source's native media ID for a given Media record.
-   * Checks cached mappings.sources first, then calls source.lookupByMapping()
-   * if the source declares the mapping capability.
-   */
   async resolveMediaId(media: Media, src: Source, opts: SourceCallOpts): Promise<string | null> {
-    // 1. Cached in the media record (set by a prior resolution).
-    const cached = media.mappings.sources?.[src.id];
+    const perSource = this.mappingCache.get(media.id);
+    const cached = perSource?.get(src.id);
     if (cached) return cached;
 
     const cacheAndReturn = (resolved: string) => {
-      if (!media.mappings.sources) media.mappings.sources = {};
-      media.mappings.sources[src.id] = resolved;
+      let map = this.mappingCache.get(media.id);
+      if (!map) {
+        map = new Map();
+        this.mappingCache.set(media.id, map);
+      }
+      map.set(src.id, resolved);
       return resolved;
     };
 
-    // 2. Source-native lookup via cross-source mappings (AniList ID, MAL ID, …).
-    //    Only sources that opt in with `caps.mapping`.
     if (src.caps.mapping && src.lookupByMapping) {
       try {
         const resolved = await src.lookupByMapping(media.mappings as Record<string, unknown>, {
@@ -145,15 +222,10 @@ export class Registry {
         });
         if (resolved) return cacheAndReturn(resolved);
       } catch {
-        // fall through — source lookup failed
+        // fall through
       }
     }
 
-    // 3. Fuzzy title-search fallback. Most playback sources don't index by
-    //    AniList/MAL ID natively (allmanga, animeparadise, anikoto, gogoanime,
-    //    goyabu, mangadex, mangapill, weebcentral) — but they all expose
-    //    search(). We search by title and pick the best match above a
-    //    similarity threshold. This is what 1.x's MappingClient did.
     if (src.caps.search && src.search) {
       const titles = collectTitles(media);
       for (const title of titles) {
@@ -161,21 +233,30 @@ export class Registry {
           const candidates = await src.search(title, media.kind, { signal: opts.signal });
           const best = pickBestMatch(candidates, titles, media.year);
           if (best) {
-            // Source-native raw id lives in the encoded media id. We extract
-            // it via decodeId so the registry stays generic.
             try {
               const raw = decodeId(best.id).r;
               return cacheAndReturn(raw);
             } catch {
-              // best.id wasn't an opaque token — uncommon, but fall through.
+              // best.id wasn't an opaque token
             }
           }
         } catch {
-          // search failed; try the next title candidate.
+          // search failed; try the next title candidate
         }
       }
     }
 
+    return null;
+  }
+
+  private findCachedMediaForEpisode(episode: Episode): Media | null {
+    for (const media of this.mediaCache.values()) {
+      const decoded = decodeId(episode.id);
+      if (decoded.s) {
+        const perSource = this.mappingCache.get(media.id);
+        if (perSource?.has(decoded.s)) return media;
+      }
+    }
     return null;
   }
 
@@ -188,10 +269,6 @@ export class Registry {
   }
 }
 
-/**
- * Title candidates to try in order, most → least informative. We dedupe so a
- * Media that only carries an english/romaji title doesn't get queried twice.
- */
 function collectTitles(media: Media): string[] {
   const t = media.title;
   const seen = new Set<string>();
@@ -206,15 +283,6 @@ function collectTitles(media: Media): string[] {
   return out;
 }
 
-/**
- * Pick the best Media from a source's `search()` candidates by fuzzy-matching
- * the candidate title against every known title of the reference media.
- * Returns null when no candidate clears `TITLE_MATCH_THRESHOLD`.
- *
- * When `referenceYear` is set, candidates whose year disagrees by more than
- * 1 are rejected even if their similarity is high — that keeps "Naruto" from
- * matching "Naruto: Shippuden" with a fluke high overlap.
- */
 function pickBestMatch(
   candidates: Media[],
   referenceTitles: string[],

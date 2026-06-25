@@ -59,8 +59,7 @@ Response: `Media[]`
     "cover": { "url": "https://s4.anilist.co/file/anilistcdn/...", "color": "#e4a15d" },
     "score": { "value": 90, "scale": 100 },
     "year": 2023,
-    "catalogues": ["anilist"],
-    "playbackSources": [],
+    "source": "anilist",
     "mappings": { "anilist": 154587, "mal": 52991 }
   }
 ]
@@ -91,12 +90,9 @@ Response: `List<Episode>` — `{ items: Episode[], nextCursor?: string }`
   "items": [
     {
       "id": "eyJ2IjoxLCJ0IjoiZXBpc29kZSIsInMiOiJtZWdhcGxheSIsInIiOiIxNTQ1ODc6MSJ9",
-      "mediaId": "...",
       "number": 1,
       "title": "Episode 1",
-      "languages": ["sub", "dub"],
-      "qualities": ["auto"],
-      "source": "megaplay"
+      "languages": ["sub", "dub"]
     }
   ]
 }
@@ -123,15 +119,23 @@ Response: `SourceInfo[]`
 ]
 ```
 
-### `GET /episode/:id/stream?language=sub&quality=auto&adjacency=walk-relations`
+### `GET /episode/:id/streams`
 
-Resolve a playable stream URL.
+Resolve **all** available streams — all sources, all servers, all languages — as a Server-Sent Events stream. Each SSE event is one `Stream` object emitted as it arrives. Cross-source fan-out happens automatically when the SDK has cached media from a prior `episodes` call.
 
-| Param       | Values                                | Default          |
-| ----------- | ------------------------------------- | ---------------- |
-| `language`  | `sub` \| `dub` \| `raw`               | `sub`            |
-| `quality`   | `1080p` \| `720p` \| `480p` \| `auto` | `auto`           |
-| `adjacency` | `within-media` \| `walk-relations`    | `walk-relations` |
+```sh
+curl 'localhost:3030/episode/EPISODE_ID/streams'
+```
+
+Each SSE event is a `Stream`. The client picks the preferred stream by `language`, `source`, and `server`.
+
+### `GET /episode/:id/stream?language=sub`
+
+Returns a single stream from the primary source. Used internally by the download endpoint. For UI, prefer `/streams`.
+
+| Param      | Values                  | Default |
+| ---------- | ----------------------- | ------- |
+| `language` | `sub` \| `dub` \| `raw` | `sub`   |
 
 ```sh
 curl 'localhost:3030/episode/EPISODE_ID/stream?language=dub'
@@ -142,20 +146,13 @@ Response: `Stream`
 ```json
 {
   "url": "https://cdn.example.com/ep1.m3u8",
-  "origin": {
-    "host": "cdn.example.com",
-    "url": "https://cdn.example.com/ep1.m3u8",
-    "proxied": false
-  },
-  "isHls": true,
-  "qualities": [{ "label": "auto", "url": "https://cdn.example.com/ep1.m3u8" }],
+  "source": "allmanga",
+  "server": "cdn.example.com",
+  "quality": "auto",
   "language": "dub",
+  "isHls": true,
   "subtitles": [],
-  "headers": { "Referer": "https://megaplay.buzz/" },
-  "adjacent": {
-    "prev": null,
-    "next": { "id": "...", "number": 2 }
-  }
+  "headers": { "Referer": "https://megaplay.buzz/" }
 }
 ```
 
@@ -173,11 +170,9 @@ Response: `Pages`
 {
   "pages": [
     {
-      "url": "https://uploads.mangadex.org/data/hash/page1.jpg",
-      "origin": { "host": "uploads.mangadex.org" }
+      "url": "https://uploads.mangadex.org/data/hash/page1.jpg"
     }
-  ],
-  "adjacent": { "next": { "id": "...", "number": 2 } }
+  ]
 }
 ```
 
@@ -244,7 +239,7 @@ Note: in Android emulators, `localhost` on the host machine is `10.0.2.2`.
 
 ## Proxy
 
-When `proxy` is set on `startServer`, every `stream.url`, `stream.qualities[].url`, subtitle URL, and `pages[].url` in responses is rewritten through `/proxy`. Browsers can play the rewritten URLs directly. See [Stream Proxy](/docs/proxy/).
+When `proxy` is set on `startServer`, every `stream.url`, subtitle URL, and `pages[].url` in responses is rewritten through `/proxy`. Browsers can play the rewritten URLs directly. See [Stream Proxy](/docs/proxy/).
 
 ## Downloads
 

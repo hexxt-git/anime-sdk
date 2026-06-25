@@ -19,8 +19,7 @@ const sdk = createSdk({ sources: ['mangadex'] });
 const results = await sdk.search('Frieren', { kind: 'manga' });
 const { items: chapters } = await sdk.chapters(results[0]);
 const pages = await sdk.pages(chapters[0]);
-// pages.pages[0].url → image URL
-// pages.pages[0].origin.host → 'uploads.mangadex.org'
+// pages.pages[0].url → image URL (from uploads.mangadex.org)
 ```
 
 ## Pagination

@@ -32,9 +32,8 @@ export class AnikotoSource implements Source {
           kind: 'anime',
           title: { preferred: title },
           cover: imgSrc ? { url: imgSrc } : undefined,
-          catalogues: [this.id],
-          playbackSources: [this.id],
-          mappings: { sources: { [this.id]: id } },
+          source: this.id,
+          mappings: {},
         };
       })
       .filter((r): r is Media => r !== null);
@@ -53,71 +52,73 @@ export class AnikotoSource implements Source {
       items: json.data.episodes.map(
         (ep: any): Episode => ({
           id: encodeId({ t: 'episode', s: this.id, r: ep.episode_embed_id }),
-          mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
           number: ep.number,
           title: ep.title || `Episode ${ep.number}`,
           languages: [
             ...(ep.embed_url?.sub ? ['sub' as const] : []),
             ...(ep.embed_url?.dub ? ['dub' as const] : []),
           ],
-          qualities: ['auto'],
-          source: this.id,
         }),
       ),
     };
   }
 
-  async stream(
-    episodeId: string,
-    opts: SourceCallOpts & { language?: 'sub' | 'dub' | 'raw' },
-  ): Promise<Stream> {
+  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream[]> {
     const { r: rawUnit } = decodeId(episodeId);
-    const lang = opts.language ?? 'sub';
-    const embedUrl = `https://megaplay.buzz/stream/s-2/${rawUnit}/${lang}`;
-    const embedRes = await this.http.get(embedUrl, {
-      signal: opts.signal,
-      headers: { Referer: this.baseUrl },
-    });
-    const embedPage = await embedRes.text();
-    const fileIdMatch = embedPage.match(/File\s+(\d+)\s+-/);
-    if (!fileIdMatch) throw new Error('Anikoto: no file ID on megaplay embed page');
-    const fileId = fileIdMatch[1];
 
-    const srcRes = await this.http.get(`https://megaplay.buzz/stream/getSources?id=${fileId}`, {
-      signal: opts.signal,
-      headers: {
-        Referer: `https://megaplay.buzz/stream/s-5/${rawUnit}/${lang}`,
-        'X-Requested-With': 'XMLHttpRequest',
-      },
-    });
-    const srcJson = (await srcRes.json()) as any;
-    if (!srcJson.sources?.file) throw new Error('Anikoto: no video sources');
+    const results = await Promise.allSettled(
+      (['sub', 'dub'] as const).map(async (lang) => {
+        const embedUrl = `https://megaplay.buzz/stream/s-2/${rawUnit}/${lang}`;
+        const embedRes = await this.http.get(embedUrl, {
+          signal: opts.signal,
+          headers: { Referer: this.baseUrl },
+        });
+        const embedPage = await embedRes.text();
+        const fileIdMatch = embedPage.match(/File\s+(\d+)\s+-/);
+        if (!fileIdMatch) throw new Error('no file ID on megaplay embed page');
+        const fileId = fileIdMatch[1];
 
-    const url: string = srcJson.sources.file;
-    let host = '';
-    try {
-      host = new URL(url).hostname;
-    } catch {}
-    const subtitles: Subtitle[] = ((srcJson.tracks ?? []) as any[])
-      .filter((t) => t.kind === 'captions')
-      .map(
-        (t): Subtitle => ({
-          url: t.file,
-          label: t.label,
-          language: String(t.label).toLowerCase(),
-          format: String(t.file).endsWith('.vtt') ? 'vtt' : 'srt',
-        }),
-      );
+        const srcRes = await this.http.get(`https://megaplay.buzz/stream/getSources?id=${fileId}`, {
+          signal: opts.signal,
+          headers: {
+            Referer: `https://megaplay.buzz/stream/s-5/${rawUnit}/${lang}`,
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+        });
+        const srcJson = (await srcRes.json()) as any;
+        if (!srcJson.sources?.file) throw new Error('no video sources');
 
-    return {
-      url,
-      origin: { host, url, proxied: false },
-      isHls: url.includes('.m3u8'),
-      qualities: [{ label: 'auto', url }],
-      language: lang,
-      subtitles,
-      headers: { Referer: 'https://megaplay.buzz/' },
-      adjacent: {},
-    };
+        const url: string = srcJson.sources.file;
+        let host = '';
+        try {
+          host = new URL(url).hostname;
+        } catch {}
+        const subtitles: Subtitle[] = ((srcJson.tracks ?? []) as any[])
+          .filter((t) => t.kind === 'captions')
+          .map(
+            (t): Subtitle => ({
+              url: t.file,
+              label: t.label,
+              language: String(t.label).toLowerCase(),
+              format: String(t.file).endsWith('.vtt') ? 'vtt' : 'srt',
+            }),
+          );
+
+        return {
+          url,
+          source: this.id,
+          server: host || 'megaplay',
+          quality: 'auto' as const,
+          language: lang,
+          isHls: url.includes('.m3u8'),
+          headers: { Referer: 'https://megaplay.buzz/' },
+          subtitles,
+        };
+      }),
+    );
+
+    const streams = results.flatMap((r) => (r.status === 'fulfilled' ? [r.value] : []));
+    if (streams.length === 0) throw new Error(`Anikoto: no playable streams for ${rawUnit}`);
+    return streams;
   }
 }

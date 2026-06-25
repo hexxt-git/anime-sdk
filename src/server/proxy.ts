@@ -104,14 +104,9 @@ export function proxifyStream(
   return {
     ...stream,
     url: buildProxyUrl(proxyBase, stream.url, hParam, signSecret),
-    qualities: stream.qualities.map((q) => ({
-      ...q,
-      url: buildProxyUrl(proxyBase, q.url, hParam, signSecret),
-    })),
     subtitles: stream.subtitles.map((s) =>
       proxifySubtitle(proxyBase, s, stream.headers, signSecret),
     ),
-    origin: { ...stream.origin, proxied: true },
   };
 }
 

@@ -35,9 +35,8 @@ export class AnimeParadiseSource implements Source {
             : item.released
               ? new Date(item.released).getUTCFullYear()
               : undefined,
-        catalogues: [this.id],
-        playbackSources: [this.id],
-        mappings: { sources: { [this.id]: item._id } },
+        source: this.id,
+        mappings: {},
       }),
     );
   }
@@ -55,18 +54,15 @@ export class AnimeParadiseSource implements Source {
       items: episodes.map(
         (ep): Episode => ({
           id: encodeId({ t: 'episode', s: this.id, r: `${ep.uid}:${mediaId}` }),
-          mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
           number: parseFloat(ep.number),
           title: ep.title ?? `Episode ${ep.number}`,
           languages: ['sub'],
-          qualities: ['auto'],
-          source: this.id,
         }),
       ),
     };
   }
 
-  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream> {
+  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream[]> {
     const { r: rawUnit } = decodeId(episodeId);
     const sep = rawUnit.lastIndexOf(':');
     if (sep < 0) throw new Error(`AnimeParadise: invalid episode id: ${rawUnit}`);
@@ -81,10 +77,6 @@ export class AnimeParadiseSource implements Source {
     if (!episode?.streamLink) throw new Error('AnimeParadise: no streamLink in response');
 
     const url = `${STREAM_BASE}/m3u8?url=${encodeURIComponent(episode.streamLink)}`;
-    let host = '';
-    try {
-      host = new URL(url).hostname;
-    } catch {}
     const rawSubs = normalizeSubtitleEntries(episode.subData);
     const subtitles: Subtitle[] = rawSubs.map((s) => ({
       url: s.url,
@@ -93,15 +85,17 @@ export class AnimeParadiseSource implements Source {
       format: (s.format ?? 'vtt') as 'vtt' | 'srt' | 'ass',
     }));
 
-    return {
-      url,
-      origin: { host, url, proxied: false },
-      isHls: true,
-      qualities: [{ label: 'auto', url }],
-      language: 'sub',
-      subtitles,
-      headers: { Referer: 'https://animeparadise.moe/' },
-      adjacent: {},
-    };
+    return [
+      {
+        url,
+        source: this.id,
+        server: 'animeparadise',
+        quality: 'auto' as const,
+        language: 'sub' as const,
+        isHls: true,
+        headers: { Referer: 'https://animeparadise.moe/' },
+        subtitles,
+      },
+    ];
   }
 }

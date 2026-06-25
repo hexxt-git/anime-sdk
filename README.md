@@ -30,18 +30,25 @@ for await (const hit of sdk.search('frieren', { kind: 'anime' })) {
 const { items: episodes } = await sdk.episodes(results[0]);
 // items is Episode[] — each has an opaque .id
 
-// 3. Resolve stream
-const stream = await sdk.stream(episodes[0], { language: 'sub' });
-console.log(stream.url); // playable HLS or MP4 URL
-console.log(stream.origin.host); // origin hostname (no proxy URL parsing needed)
-console.log(stream.adjacent.next); // prev/next episode for navigation
+// 3. Resolve all available streams from all sources — iterate progressively
+for await (const stream of sdk.stream(episodes[0])) {
+  console.log(stream.source); // 'allmanga' | 'gogoanime' | …
+  console.log(stream.server); // 'mp4upload' | 'wixmp' | …
+  console.log(stream.language); // 'sub' | 'dub' | 'raw'
+  console.log(stream.quality); // '1080p' | '720p' | 'auto' | …
+  console.log(stream.url); // playable HLS or MP4 URL
+}
+
+// Or collect all at once and let the user pick:
+const streams = await sdk.stream(episodes[0]);
+const preferred = streams.find((s) => s.language === 'sub') ?? streams[0];
 ```
 
 ### Manga
 
 ```ts
 const { items: chapters } = await sdk.chapters(mangaResult);
-const pages = await sdk.pages(chapters[0]); // no language argument
+const pages = await sdk.pages(chapters[0]);
 console.log(pages.pages.map((p) => p.url));
 ```
 
@@ -90,14 +97,15 @@ startServer({
 });
 ```
 
-`stream.url`, subtitle URLs, and `pages[].url` are rewritten through `/proxy`. `stream.origin.proxied` becomes `true`; `stream.origin.host` still reports the real CDN.
+`stream.url`, subtitle URLs, and `pages[].url` are rewritten through `/proxy`.
 
 ### Downloads
 
 ```ts
 import { downloadVideo, downloadMangaChapter } from 'anime-sdk';
 
-const stream = await sdk.stream(episode, { language: 'sub' });
+const streams = await sdk.stream(episode);
+const stream = streams.find((s) => s.language === 'sub') ?? streams[0];
 await downloadVideo(stream, './episode-1.mp4', {
   onProgress: ({ phase, detail }) => console.log(`[${phase}] ${detail ?? ''}`),
 });
@@ -112,7 +120,7 @@ await downloadMangaChapter(pages, './chapter-1.zip');
 import { AniError, AniErrorCode } from 'anime-sdk';
 
 try {
-  const stream = await sdk.stream(episode);
+  const streams = await sdk.stream(episode);
 } catch (e) {
   if (e instanceof AniError) {
     switch (e.code) {
@@ -154,16 +162,19 @@ const results = await sdk.search('frieren', { kind: 'anime', signal: ac.signal }
 ## Server routes
 
 ```
-GET /search?q=…&kind=anime           → Media[]
-GET /media/:id                       → Media
-GET /media/:id/episodes              → List<Episode>
-GET /media/:id/chapters              → List<Chapter>
-GET /media/:id/sources               → SourceInfo[]
-GET /episode/:id/stream?language=sub → Stream
-GET /chapter/:id/pages               → Pages
-GET /browse?list=trending&kind=anime → List<Media>
-GET /health                          → SourceHealth[]
+GET /search?q=…&kind=anime                        → Media[]  (SSE, streams as they arrive)
+GET /media/:id                                    → Media
+GET /media/:id/episodes                           → List<Episode>
+GET /media/:id/chapters                           → List<Chapter>
+GET /media/:id/sources                            → SourceInfo[]
+GET /episode/:id/streams                          → Stream[]  (SSE — all sources, all languages)
+GET /episode/:id/stream?language=sub              → Stream    (single stream, for downloads)
+GET /chapter/:id/pages                            → Pages
+GET /browse?list=trending&kind=anime              → List<Media>
+GET /health                                       → SourceHealth[]
 ```
+
+The `/episode/:id/streams` SSE endpoint emits one JSON object per stream as each source responds. Cross-source fan-out happens automatically when the SDK has cached media from a prior episodes call.
 
 ## API reference
 

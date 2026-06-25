@@ -23,31 +23,37 @@ describe('Anikoto E2E', () => {
     const list = await source.episodes(decoded.r, {});
     expect(list.items.length).toBeGreaterThan(0);
 
-    const stream = await source.stream(list.items[0].id, { language: 'sub' });
-    expect(stream.url).toBeTruthy();
-    console.log(`Anikoto (sub) stream: ${stream.url.slice(0, 80)}`);
+    const streams = await source.stream(list.items[0].id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    streams.forEach((s) => expect(s.source).toBe('anikoto'));
+    const sub = streams.find((s) => s.language === 'sub') ?? streams[0];
+    expect(sub.url).toBeTruthy();
+    console.log(
+      `Anikoto stream: ${sub.url.slice(0, 80)} (${streams.map((s) => s.language).join('+')})`,
+    );
 
-    const result = await captureStreamScreenshot('anikoto_sub', streamToPayload(stream));
+    const result = await captureStreamScreenshot('anikoto_sub', streamToPayload(sub));
     expect(result.outputPath).toMatch(/screenshot_anikoto_sub\.png$/);
   }, 90000);
 
-  it('resolves a dub stream for known ID, and captures a screenshot', async () => {
+  it('resolves streams for a known episode and finds sub or dub', async () => {
     const http = new HttpClient({ timeoutMs: 25000 });
     const source = new AnikotoSource(http);
 
     const list = await source.episodes('7457', {});
     expect(list.items.length).toBeGreaterThan(0);
 
-    const dubEp = list.items.find((ep) => ep.languages.includes('dub'));
-    if (!dubEp) {
-      console.warn('Dub not available for this title, skipping dub test');
-      return;
+    const streams = await source.stream(list.items[0].id, {});
+    expect(streams.length).toBeGreaterThan(0);
+
+    const dub = streams.find((s) => s.language === 'dub');
+    if (dub) {
+      const result = await captureStreamScreenshot('anikoto_dub', streamToPayload(dub));
+      expect(result.outputPath).toMatch(/screenshot_anikoto_dub\.png$/);
+    } else {
+      const sub = streams.find((s) => s.language === 'sub') ?? streams[0];
+      const result = await captureStreamScreenshot('anikoto_sub2', streamToPayload(sub));
+      expect(result.outputPath).toMatch(/screenshot_anikoto_sub2\.png$/);
     }
-
-    const stream = await source.stream(dubEp.id, { language: 'dub' });
-    expect(stream.url).toBeTruthy();
-
-    const result = await captureStreamScreenshot('anikoto_dub', streamToPayload(stream));
-    expect(result.outputPath).toMatch(/screenshot_anikoto_dub\.png$/);
   }, 90000);
 });

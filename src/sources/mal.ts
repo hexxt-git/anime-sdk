@@ -47,8 +47,7 @@ function mapNode(m: any, path: 'anime' | 'manga', sourceId: string): Media {
     status: m.status ?? undefined,
     episodeCount: m.episodes ?? undefined,
     chapterCount: m.chapters ?? undefined,
-    catalogues: [sourceId],
-    playbackSources: [],
+    source: sourceId,
     mappings: { mal: m.mal_id },
   };
 }

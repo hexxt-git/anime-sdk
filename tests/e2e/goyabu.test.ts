@@ -33,9 +33,12 @@ describe('Goyabu E2E', () => {
     const list = await source.episodes(decoded.r, {});
     expect(list.items.length).toBeGreaterThan(0);
 
-    const stream = await source.stream(list.items[0].id, {});
+    const streams = await source.stream(list.items[0].id, {});
+    expect(streams.length).toBeGreaterThan(0);
+    const stream = streams[0];
     expect(stream.url).toBeTruthy();
-    console.log(`Goyabu stream: ${stream.url.slice(0, 80)}`);
+    expect(stream.source).toBe('goyabu');
+    console.log(`Goyabu stream: ${stream.url.slice(0, 80)} (${stream.language})`);
 
     const result = await captureStreamScreenshot('goyabu', streamToPayload(stream));
     expect(result.outputPath).toMatch(/screenshot_goyabu\.png$/);

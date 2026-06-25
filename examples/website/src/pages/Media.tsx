@@ -134,14 +134,8 @@ export default function Media() {
         )}
 
         <div className="mt-4">
-          <p className="text-base-400 mb-1 text-[10px] tracking-widest">CATALOGUES</p>
-          <div className="flex flex-wrap gap-1">
-            {data.catalogues.map((c) => (
-              <span key={c} className="text-base-400 text-[10px]">
-                {c}
-              </span>
-            ))}
-          </div>
+          <p className="text-base-400 mb-1 text-[10px] tracking-widest">SOURCE</p>
+          <span className="text-base-400 text-[10px]">{data.source}</span>
         </div>
 
         {data.mappings.anilist && (

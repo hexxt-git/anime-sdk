@@ -55,9 +55,8 @@ export class GoyabuSource implements Source {
         kind: 'anime',
         title: { preferred: title },
         cover: coverUrl ? { url: coverUrl } : undefined,
-        catalogues: [this.id],
-        playbackSources: [this.id],
-        mappings: { sources: { [this.id]: id } },
+        source: this.id,
+        mappings: {},
       });
     }
     return out;
@@ -93,12 +92,9 @@ export class GoyabuSource implements Source {
             if (!link) continue;
             items.push({
               id: encodeId({ t: 'episode', s: this.id, r: link }),
-              mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
               number: num,
               title: ep.episode_name ? `Episódio ${num}: ${ep.episode_name}` : `Episódio ${num}`,
               languages: [mediaId.toLowerCase().includes('dublado') ? 'dub' : 'sub'],
-              qualities: ['auto'],
-              source: this.id,
             });
           }
           parsed = true;
@@ -117,12 +113,9 @@ export class GoyabuSource implements Source {
         const id = href.startsWith('http') ? new URL(href).pathname + new URL(href).search : href;
         items.push({
           id: encodeId({ t: 'episode', s: this.id, r: id }),
-          mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
           number: num,
           title: `Episódio ${num}`,
           languages: ['sub'],
-          qualities: ['auto'],
-          source: this.id,
         });
       }
     }
@@ -130,7 +123,7 @@ export class GoyabuSource implements Source {
     return { items };
   }
 
-  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream> {
+  async stream(episodeId: string, opts: SourceCallOpts): Promise<Stream[]> {
     const { r: rawUnit } = decodeId(episodeId);
     const fullUrl = `${this.baseUrl}${rawUnit.startsWith('/') ? '' : '/'}${rawUnit}`;
     const res = await this.http.get(fullUrl, { signal: opts.signal });
@@ -149,21 +142,23 @@ export class GoyabuSource implements Source {
       payloads.push(...this.scrapeDirectStreams(html, fullUrl));
     }
     if (payloads.length === 0) throw new Error(`Goyabu: no playable streams for ${rawUnit}`);
-    const primary = payloads[0];
-    let host = '';
-    try {
-      host = new URL(primary.sourceUrl).hostname;
-    } catch {}
-    return {
-      url: primary.sourceUrl,
-      origin: { host, url: primary.sourceUrl, proxied: false },
-      isHls: primary.isHLS,
-      qualities: payloads.map((p) => ({ label: p.quality, url: p.sourceUrl })),
-      language: 'sub',
-      subtitles: [],
-      headers: primary.headers,
-      adjacent: {},
-    };
+    const lang = rawUnit.toLowerCase().includes('dublado') ? 'dub' : 'sub';
+    return payloads.map((p): Stream => {
+      let server = 'goyabu';
+      try {
+        server = new URL(p.sourceUrl).hostname;
+      } catch {}
+      return {
+        url: p.sourceUrl,
+        source: this.id,
+        server,
+        quality: p.quality,
+        language: lang,
+        isHls: p.isHLS,
+        headers: p.headers,
+        subtitles: [],
+      };
+    });
   }
 
   private collectBloggerUrls(html: string): string[] {

@@ -2,6 +2,7 @@ import { HttpClient } from './internal/http.js';
 import { Registry } from './registry.js';
 import type { ProgressiveResult } from './progressive.js';
 import type { Media, Episode, Chapter, Stream, Pages, List, SourceInfo } from './types.js';
+export type { Stream };
 import type { SdkOptions } from './config.js';
 import { resolveOptions } from './config.js';
 import { decodeId } from './internal/id.js';
@@ -43,9 +44,6 @@ const BROWSER_UA =
 
 function buildSources(http: HttpClient, enabled: ReadonlyArray<string>) {
   const set = new Set(enabled);
-  // Sources that require a browser-style User-Agent get their own HttpClient
-  // clone so they don't bleed the UA onto API-only sources (AniList, MangaDex,
-  // Jikan) whose servers return 400/HTML when they see a Chrome UA.
   const browserHttp = http.withHeaders({ 'User-Agent': BROWSER_UA });
   const all = [
     new AnilistSource(http),
@@ -99,7 +97,9 @@ export class Sdk {
       .concat(this.registry.sourcesFor('manga', 'info'));
     const src = sources.find((s) => s.id === decoded.s);
     if (!src?.info) throw new Error(`No source with info capability for id: ${id}`);
-    return src.info(decoded.r, { signal: opts?.signal });
+    const result = await src.info(decoded.r, { signal: opts?.signal });
+    this.registry.cacheMedia(result);
+    return result;
   }
 
   async sources(media: Media | string, opts?: { signal?: AbortSignal }): Promise<SourceInfo[]> {
@@ -112,6 +112,7 @@ export class Sdk {
     opts?: { signal?: AbortSignal; cursor?: string; limit?: number },
   ): Promise<List<Episode>> {
     const m = typeof media === 'string' ? await this.info(media, opts) : media;
+    this.registry.cacheMedia(m);
     return this.registry.mergeEpisodes(m, {
       signal: opts?.signal,
       cursor: opts?.cursor,
@@ -124,6 +125,7 @@ export class Sdk {
     opts?: { signal?: AbortSignal; cursor?: string; limit?: number },
   ): Promise<List<Chapter>> {
     const m = typeof media === 'string' ? await this.info(media, opts) : media;
+    this.registry.cacheMedia(m);
     return this.registry.mergeChapters(m, {
       signal: opts?.signal,
       cursor: opts?.cursor,
@@ -131,28 +133,11 @@ export class Sdk {
     });
   }
 
-  async stream(
-    episode: Episode | string,
-    opts?: {
-      language?: 'sub' | 'dub' | 'raw';
-      quality?: string;
-      adjacency?: 'within-media' | 'walk-relations';
-      signal?: AbortSignal;
-    },
-  ): Promise<Stream> {
-    const id = typeof episode === 'string' ? episode : episode.id;
-    const decoded = decodeId(id);
-    const sources = this.registry
-      .sourcesFor('anime', 'stream')
-      .concat(this.registry.sourcesFor('manga', 'stream'));
-    const src = sources.find((s) => s.id === decoded.s);
-    if (!src?.stream) throw new Error(`No source with stream capability for id: ${id}`);
-    return src.stream(id, {
-      language: opts?.language,
-      quality: opts?.quality,
-      adjacency: opts?.adjacency,
-      signal: opts?.signal,
-    });
+  stream(episode: Episode | string, opts?: { signal?: AbortSignal }): ProgressiveResult<Stream> {
+    if (typeof episode !== 'string') {
+      return this.registry.streamEpisode(episode, { signal: opts?.signal });
+    }
+    return this.registry.streamFromSource(episode, { signal: opts?.signal });
   }
 
   async pages(chapter: Chapter | string, opts?: { signal?: AbortSignal }): Promise<Pages> {

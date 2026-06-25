@@ -43,9 +43,8 @@ export class MangapillSource implements Source {
           kind: 'manga',
           title: { preferred: title },
           cover: coverUrl ? { url: coverUrl } : undefined,
-          catalogues: [this.id],
-          playbackSources: [this.id],
-          mappings: { sources: { [this.id]: rawId } },
+          source: this.id,
+          mappings: {},
         });
       }
     }
@@ -72,10 +71,8 @@ export class MangapillSource implements Source {
       const rawId = href.startsWith('/') ? href.slice(1) : href;
       items.push({
         id: encodeId({ t: 'chapter', s: this.id, r: rawId }),
-        mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
         number: num,
         title,
-        source: this.id,
       });
     }
     items.reverse();
@@ -93,10 +90,10 @@ export class MangapillSource implements Source {
       .querySelectorAll('.js-page')
       .map((img) => {
         const src = img.getAttribute('data-src') || img.getAttribute('src');
-        return src ? { url: src, origin: { host: 'mangapill.com' } } : null;
+        return src ? { url: src } : null;
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
-    return { pages, adjacent: {} };
+    return { pages };
   }
 
   async lookupByMapping(

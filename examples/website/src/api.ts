@@ -43,31 +43,25 @@ export interface Media {
   episodeCount?: number;
   chapterCount?: number;
   description?: string;
-  catalogues: string[];
-  playbackSources: string[];
-  mappings: { anilist?: number; mal?: number; kitsu?: number; sources?: Record<string, string> };
+  source: string;
+  mappings: { anilist?: number; mal?: number; kitsu?: number };
 }
 
 export interface Episode {
   id: string;
-  mediaId: string;
   number: number;
   title?: string;
   thumbnail?: string;
   airDate?: string;
   filler?: boolean;
   recap?: boolean;
-  languages: Language[];
-  qualities: Quality[];
-  source: string;
+  languages?: Language[];
 }
 
 export interface Chapter {
   id: string;
-  mediaId: string;
   number: number;
   title?: string;
-  source: string;
 }
 
 export interface Subtitle {
@@ -79,24 +73,17 @@ export interface Subtitle {
 
 export interface Stream {
   url: string;
-  origin: { host: string; url: string; proxied: boolean };
-  isHls: boolean;
-  qualities: { label: Quality; url: string }[];
+  source: string;
+  server: string;
+  quality: Quality;
   language: Language;
-  subtitles: Subtitle[];
+  isHls: boolean;
   headers?: Record<string, string>;
-  adjacent: {
-    prev?: { id: string; number: number };
-    next?: { id: string; number: number };
-  };
+  subtitles: Subtitle[];
 }
 
 export interface Pages {
-  pages: { url: string; origin: { host: string }; width?: number; height?: number }[];
-  adjacent: {
-    prev?: { id: string; number: number };
-    next?: { id: string; number: number };
-  };
+  pages: { url: string; width?: number; height?: number }[];
 }
 
 export interface List<T> {
@@ -135,15 +122,31 @@ export const mediaChapters = (id: string, cursor?: string): Promise<List<Chapter
 export const mediaSources = (id: string): Promise<SourceInfo[]> =>
   get(`/media/${encodeURIComponent(id)}/sources`);
 
-export const episodeStream = (
+export function episodeStreams(
   id: string,
-  language: Language = 'sub',
-  adjacency?: string,
-): Promise<Stream> =>
-  get(`/episode/${encodeURIComponent(id)}/stream`, {
-    language,
-    ...(adjacency ? { adjacency } : {}),
-  });
+  _mediaId?: string,
+  onStream?: (s: Stream) => void,
+  onDone?: () => void,
+  onError?: (e: string) => void,
+): { close: () => void } {
+  const url = `${API}/episode/${encodeURIComponent(id)}/streams`;
+  const es = new EventSource(url);
+  es.onmessage = (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.error) {
+        onError?.(data.error);
+      } else {
+        onStream?.(data as Stream);
+      }
+    } catch {}
+  };
+  es.onerror = () => {
+    onDone?.();
+    es.close();
+  };
+  return { close: () => es.close() };
+}
 
 export const chapterPages = (id: string): Promise<Pages> =>
   get(`/chapter/${encodeURIComponent(id)}/pages`);

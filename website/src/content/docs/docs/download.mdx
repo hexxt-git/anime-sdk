@@ -13,7 +13,8 @@ import { createSdk, downloadVideo } from 'anime-sdk';
 const sdk = createSdk();
 const results = await sdk.search('Frieren', { kind: 'anime' });
 const { items: episodes } = await sdk.episodes(results[0]);
-const stream = await sdk.stream(episodes[0], { language: 'sub' });
+const streams = await sdk.stream(episodes[0]);
+const stream = streams.find((s) => s.language === 'sub') ?? streams[0];
 
 const result = await downloadVideo(stream, './episode-1.mp4', {
   onProgress: ({ phase, detail }) => console.log(`[${phase}] ${detail ?? ''}`),
@@ -24,7 +25,7 @@ console.log(`Saved ${result.fileSize} bytes → ${result.outputPath}`);
 - **HLS streams**: every segment is fetched, PNG-disguised segments are stripped, then `ffmpeg -c copy` muxes the result to MP4.
 - **Direct MP4**: streamed to disk via `fetch`.
 
-Multiple candidates are tried: `stream.url` first, then each `stream.qualities[i].url` until one succeeds.
+Each `Stream` is one URL. If it fails, try the next `Stream` from the array.
 
 ### Progress reporting
 

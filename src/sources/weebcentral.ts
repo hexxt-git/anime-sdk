@@ -40,9 +40,8 @@ export class WeebcentralSource implements Source {
             kind: 'manga',
             title: { preferred: title },
             cover: coverUrl ? { url: coverUrl } : undefined,
-            catalogues: [this.id],
-            playbackSources: [this.id],
-            mappings: { sources: { [this.id]: idMatch[1] } },
+            source: this.id,
+            mappings: {},
           });
         }
       }
@@ -70,10 +69,8 @@ export class WeebcentralSource implements Source {
       if (idMatch) {
         items.push({
           id: encodeId({ t: 'chapter', s: this.id, r: idMatch[1] }),
-          mediaId: encodeId({ t: 'media', s: this.id, r: mediaId }),
           number: num,
           title,
-          source: this.id,
         });
       }
     }
@@ -90,10 +87,10 @@ export class WeebcentralSource implements Source {
       .querySelectorAll('img')
       .map((img) => {
         const src = img.getAttribute('src') ?? '';
-        return src ? { url: src, origin: { host: 'weebcentral.com' } } : null;
+        return src ? { url: src } : null;
       })
       .filter((p): p is NonNullable<typeof p> => p !== null);
-    return { pages, adjacent: {} };
+    return { pages };
   }
 
   async lookupByMapping(

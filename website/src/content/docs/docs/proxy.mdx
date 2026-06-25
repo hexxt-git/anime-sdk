@@ -30,9 +30,8 @@ PROXY_SIGN_SECRET=$(openssl rand -hex 32) npx anime-sdk
 When enabled, three things happen:
 
 1. A `GET /proxy?url=…` endpoint is exposed.
-2. Every `stream.url`, `stream.qualities[i].url`, and `subtitles[i].url` in `/episode/:id/stream` responses is rewritten through `/proxy` with the required headers encoded in the URL.
+2. Every `stream.url` and `subtitles[i].url` in `/episode/:id/stream` responses is rewritten through `/proxy` with the required headers encoded in the URL.
 3. Every `pages[i].url` in `/chapter/:id/pages` responses is rewritten too.
-4. `stream.origin.proxied` becomes `true` and `stream.origin.host` still reports the real CDN hostname.
 
 Your frontend uses `stream.url` as-is — no extra headers needed.
 
