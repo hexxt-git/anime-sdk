@@ -73,7 +73,13 @@ export default function Search() {
       {isFetching && <p className="text-base-350 mt-6 px-1 text-xs">fetching...</p>}
       {isError && <p className="mt-6 px-1 text-xs text-red-900">{String(error)}</p>}
 
-      {data && (
+      {data && data.length === 0 && !isFetching && (
+        <p className="text-base-350 mt-6 px-1 text-xs">
+          no {kind} matched "{initialQ}"
+        </p>
+      )}
+
+      {data && data.length > 0 && (
         <div className="border-base-200 mt-6 border-t">
           <div className="text-base-400 px-1 py-2 text-xs tracking-widest">
             RESULTS <span className="text-base-350">({data.length})</span>

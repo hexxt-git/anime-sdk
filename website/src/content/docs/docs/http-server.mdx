@@ -242,6 +242,14 @@ val response = client.newCall(request).execute()
 
 Note: in Android emulators, `localhost` on the host machine is `10.0.2.2`.
 
+## Proxy
+
+When `proxy` is set on `startServer`, every `stream.url`, `stream.qualities[].url`, subtitle URL, and `pages[].url` in responses is rewritten through `/proxy`. Browsers can play the rewritten URLs directly. See [Stream Proxy](/docs/proxy/).
+
+## Downloads
+
+`/download/video/progress` and `/download/manga/chapter/progress` open SSE streams and emit `{ type: 'complete', token }` when the download is ready; `/download/*/file?token=…` then serves the bytes. See [Downloads](/docs/download/).
+
 ## Error responses
 
 | Status | Meaning                                          |

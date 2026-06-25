@@ -23,18 +23,14 @@ describe('KitsuSource — live', () => {
     expect(decoded.s).toBe('kitsu');
   }, 40_000);
 
-  it('info for kitsu:anime:1 maps core fields and cross-source mappings', async () => {
+  it('info for kitsu anime:1 maps core fields and cross-source mappings', async () => {
     const http = new HttpClient({ timeoutMs: 25_000 });
     const source = new KitsuSource(http);
-    const results = await source.search('Cowboy Bebop', 'anime', {});
-    const cowboyBebopId = results.find((r) => r.mappings.kitsu === 1)?.id;
-    if (!cowboyBebopId) return; // kitsu ID may differ
-
-    const info = await source.info(cowboyBebopId, {});
+    // Sdk.info passes the decoded `r` field; mirror that contract.
+    const info = await source.info('anime:1', {});
     expect(info.kind).toBe('anime');
     expect(info.episodeCount).toBe(26);
-    expect(info.mappings.kitsu).toBeTypeOf('number');
-    // Kitsu publishes MAL/AniList mappings
+    expect(info.mappings.kitsu).toBe(1);
     if (info.mappings.mal) expect(typeof info.mappings.mal).toBe('number');
   }, 40_000);
 });

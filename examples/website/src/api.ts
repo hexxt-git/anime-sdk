@@ -9,6 +9,9 @@ const get = (path: string, params: Record<string, string> = {}) =>
 
 // ─── SDK types (mirrors src/types.ts) ────────────────────────────────────────
 
+export type Quality = '1080p' | '720p' | '480p' | '360p' | 'auto';
+export type Language = 'sub' | 'dub' | 'raw';
+
 export interface MediaTitle {
   preferred: string;
   english?: string;
@@ -54,8 +57,8 @@ export interface Episode {
   airDate?: string;
   filler?: boolean;
   recap?: boolean;
-  languages: ('sub' | 'dub' | 'raw')[];
-  qualities: ('1080p' | '720p' | '480p' | '360p' | 'auto')[];
+  languages: Language[];
+  qualities: Quality[];
   source: string;
 }
 
@@ -78,8 +81,8 @@ export interface Stream {
   url: string;
   origin: { host: string; url: string; proxied: boolean };
   isHls: boolean;
-  qualities: { label: string; url: string }[];
-  language: 'sub' | 'dub' | 'raw';
+  qualities: { label: Quality; url: string }[];
+  language: Language;
   subtitles: Subtitle[];
   headers?: Record<string, string>;
   adjacent: {
@@ -109,6 +112,13 @@ export interface SourceInfo {
   successRate?: number;
 }
 
+export interface SourceHealth {
+  id: string;
+  successRate: number;
+  avgLatencyMs: number;
+  calls: number;
+}
+
 // ─── API calls ───────────────────────────────────────────────────────────────
 
 export const search = (q: string, kind: 'anime' | 'manga' = 'anime'): Promise<Media[]> =>
@@ -127,7 +137,7 @@ export const mediaSources = (id: string): Promise<SourceInfo[]> =>
 
 export const episodeStream = (
   id: string,
-  language: 'sub' | 'dub' | 'raw' = 'sub',
+  language: Language = 'sub',
   adjacency?: string,
 ): Promise<Stream> =>
   get(`/episode/${encodeURIComponent(id)}/stream`, {
@@ -150,6 +160,113 @@ export const browse = (
     ...(opts.season ? { season: opts.season } : {}),
     ...(opts.year ? { year: String(opts.year) } : {}),
   });
+
+export const health = (): Promise<SourceHealth[]> => get('/health');
+
+// ─── Downloads ───────────────────────────────────────────────────────────────
+//
+// The server runs the download in the background and streams progress over
+// SSE. When complete it returns a single-use `token` that names a temp file
+// on disk; the client GETs /download/.../file?token=… to pull the bytes.
+
+export interface VideoDownloadCallbacks {
+  onProgress: (info: { phase: string; detail?: string }) => void;
+  onComplete: (token: string) => void;
+  onError: (msg: string) => void;
+}
+
+export interface ChapterDownloadCallbacks {
+  onProgress: (info: { downloaded: number; total: number }) => void;
+  onComplete: (token: string) => void;
+  onError: (msg: string) => void;
+}
+
+export interface DownloadHandle {
+  close: () => void;
+}
+
+export function watchVideoDownload(
+  episodeId: string,
+  language: Language,
+  cb: VideoDownloadCallbacks,
+): DownloadHandle {
+  const url = `${API}/download/video/progress?episodeId=${encodeURIComponent(episodeId)}&language=${language}`;
+  const es = new EventSource(url);
+  let done = false;
+  const close = () => {
+    if (!done) {
+      done = true;
+      es.close();
+    }
+  };
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'progress') cb.onProgress({ phase: data.phase, detail: data.detail });
+      else if (data.type === 'complete') {
+        cb.onComplete(data.token);
+        close();
+      } else if (data.type === 'error') {
+        cb.onError(data.message);
+        close();
+      }
+    } catch (err) {
+      cb.onError(err instanceof Error ? err.message : String(err));
+      close();
+    }
+  };
+  es.onerror = () => {
+    if (!done) {
+      cb.onError('SSE connection error');
+      close();
+    }
+  };
+  return { close };
+}
+
+export function watchChapterDownload(
+  chapterId: string,
+  cb: ChapterDownloadCallbacks,
+): DownloadHandle {
+  const url = `${API}/download/manga/chapter/progress?chapterId=${encodeURIComponent(chapterId)}`;
+  const es = new EventSource(url);
+  let done = false;
+  const close = () => {
+    if (!done) {
+      done = true;
+      es.close();
+    }
+  };
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (data.type === 'progress')
+        cb.onProgress({ downloaded: data.downloaded, total: data.total });
+      else if (data.type === 'complete') {
+        cb.onComplete(data.token);
+        close();
+      } else if (data.type === 'error') {
+        cb.onError(data.message);
+        close();
+      }
+    } catch (err) {
+      cb.onError(err instanceof Error ? err.message : String(err));
+      close();
+    }
+  };
+  es.onerror = () => {
+    if (!done) {
+      cb.onError('SSE connection error');
+      close();
+    }
+  };
+  return { close };
+}
+
+export function downloadFileUrl(kind: 'video' | 'manga-chapter', token: string): string {
+  const path = kind === 'video' ? '/download/video/file' : '/download/manga/chapter/file';
+  return `${API}${path}?token=${encodeURIComponent(token)}`;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

@@ -1,5 +1,5 @@
 import { HttpClient } from '../internal/http.js';
-import { encodeId, decodeId } from '../internal/id.js';
+import { encodeId } from '../internal/id.js';
 import type { Media, List } from '../types.js';
 import type { Source, SourceCallOpts } from './base.js';
 
@@ -78,16 +78,17 @@ export class MalSource implements Source {
     return ((json?.data as any[]) ?? []).map((m) => mapNode(m, path, this.id));
   }
 
-  async info(id: string, opts: SourceCallOpts): Promise<Media> {
-    const { r: raw } = decodeId(id);
-    const sep = raw.indexOf(':');
+  async info(rawId: string, opts: SourceCallOpts): Promise<Media> {
+    // Sdk.info passes the decoded `r` field. Raw is "<kind>:<malId>"
+    // (set in mapNode) or, for legacy callers, a bare numeric id.
+    const sep = rawId.indexOf(':');
     let path: 'anime' | 'manga' = 'anime';
     let numericId: number;
-    if (sep >= 0 && (raw.slice(0, sep) === 'anime' || raw.slice(0, sep) === 'manga')) {
-      path = raw.slice(0, sep) as 'anime' | 'manga';
-      numericId = Number(raw.slice(sep + 1));
+    if (sep >= 0 && (rawId.slice(0, sep) === 'anime' || rawId.slice(0, sep) === 'manga')) {
+      path = rawId.slice(0, sep) as 'anime' | 'manga';
+      numericId = Number(rawId.slice(sep + 1));
     } else {
-      numericId = Number(raw);
+      numericId = Number(rawId);
     }
     const res = await this.http.get(`${this.apiUrl}/${path}/${numericId}/full`, {
       headers: { Accept: 'application/json' },
@@ -96,7 +97,7 @@ export class MalSource implements Source {
     if (res.status !== 200) throw new Error(`Jikan info failed: ${res.status}`);
     const json = (await res.json()) as any;
     const m = json?.data;
-    if (!m) throw new Error(`MAL: no media for id ${raw}`);
+    if (!m) throw new Error(`MAL: no media for id ${rawId}`);
     return mapNode(m, path, this.id);
   }
 

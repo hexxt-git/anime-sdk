@@ -178,9 +178,25 @@ createSdk({
 
 All fields optional. `createSdk()` with no args works out of the box.
 
+## Downloads
+
+```ts
+import { downloadVideo, downloadMangaChapter } from 'anime-sdk';
+
+const stream = await sdk.stream(episode, { language: 'sub' });
+await downloadVideo(stream, './episode-1.mp4');
+
+const pages = await sdk.pages(chapter);
+await downloadMangaChapter(pages, './chapter-1.zip');
+```
+
+See [Downloads](/docs/download/) for the full API.
+
 ## Next steps
 
 - [Sources](/docs/providers/): all 12 sources and what they support
 - [HTTP Server](/docs/http-server/): routes and configuration
+- [Stream Proxy](/docs/proxy/): make stream URLs browser-playable
+- [Downloads](/docs/download/): save episodes as MP4 and chapters as ZIP
 - [API Reference](/docs/api-reference/)
 - [Contributing](/docs/contributing/)

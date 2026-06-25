@@ -42,6 +42,18 @@ export const pages: Record<string, { title: string; description: string; section
       'Expose every SDK verb over REST — /search, /media/:id, /episode/:id/stream — so any language or frontend can call anime-sdk over HTTP.',
     section: 'DOCS',
   },
+  'docs/proxy': {
+    title: 'Stream Proxy',
+    description:
+      'CDN streams block browsers with CORS and custom headers. Enable the proxy and every URL the SDK returns becomes directly playable.',
+    section: 'DOCS',
+  },
+  'docs/download': {
+    title: 'Downloads',
+    description:
+      'Save anime episodes as MP4 via ffmpeg mux and manga chapters as ZIP archives with a single utility call.',
+    section: 'DOCS',
+  },
   'docs/api-reference': {
     title: 'API Reference',
     description:

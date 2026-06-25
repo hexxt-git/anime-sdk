@@ -1,5 +1,12 @@
-import type * as http from 'node:http';
+import * as http from 'node:http';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import type { Sdk } from '../sdk.js';
+import type { Stream, Pages } from '../types.js';
+import { downloadVideo, downloadMangaChapter } from '../download/index.js';
+import { ProxyOptions, proxifyStream, proxifyPages, deriveProxyBase } from './proxy.js';
 
 type Handler = (
   req: http.IncomingMessage,
@@ -8,9 +15,17 @@ type Handler = (
   query: URLSearchParams,
 ) => Promise<void>;
 
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': '*',
+  'Access-Control-Expose-Headers': '*',
+};
+
 function json(res: http.ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body);
   res.writeHead(status, {
+    ...CORS,
     'Content-Type': 'application/json',
     'Content-Length': Buffer.byteLength(data),
   });
@@ -23,7 +38,95 @@ function abort(req: http.IncomingMessage): AbortController {
   return ac;
 }
 
-export function buildRoutes(sdk: Sdk): Array<[string, string, Handler]> {
+function openSse(res: http.ServerResponse): (data: unknown) => void {
+  res.writeHead(200, {
+    ...CORS,
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  return (data) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+}
+
+export function buildRoutes(sdk: Sdk, proxyOpts?: ProxyOptions): Array<[string, string, Handler]> {
+  // Token → completed download, cleaned up after 10 minutes or on serve.
+  const pendingDownloads = new Map<
+    string,
+    { filePath: string; tmpDir: string; filename: string }
+  >();
+
+  function storePending(filePath: string, tmpDir: string, filename: string): string {
+    const token = randomUUID();
+    pendingDownloads.set(token, { filePath, tmpDir, filename });
+    setTimeout(
+      () => {
+        const info = pendingDownloads.get(token);
+        if (info) {
+          try {
+            fs.unlinkSync(info.filePath);
+          } catch {
+            /* ignore */
+          }
+          try {
+            fs.rmdirSync(info.tmpDir);
+          } catch {
+            /* ignore */
+          }
+          pendingDownloads.delete(token);
+        }
+      },
+      10 * 60 * 1000,
+    );
+    return token;
+  }
+
+  function servePending(res: http.ServerResponse, token: string | null, contentType: string): void {
+    if (!token) return json(res, 400, { error: 'Missing param: token' });
+    const info = pendingDownloads.get(token);
+    if (!info) return json(res, 404, { error: 'Download expired or not found' });
+    pendingDownloads.delete(token);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(info.filePath);
+    } catch {
+      return json(res, 500, { error: 'File missing after download' });
+    }
+    res.writeHead(200, {
+      ...CORS,
+      'Content-Type': contentType,
+      'Content-Length': stat.size,
+      'Content-Disposition': `attachment; filename="${info.filename}"`,
+    });
+    const rs = fs.createReadStream(info.filePath);
+    const cleanup = () => {
+      try {
+        fs.unlinkSync(info.filePath);
+      } catch {
+        /* ignore */
+      }
+      try {
+        fs.rmdirSync(info.tmpDir);
+      } catch {
+        /* ignore */
+      }
+    };
+    rs.on('end', cleanup);
+    rs.on('error', cleanup);
+    rs.pipe(res);
+  }
+
+  // Stream/Pages-bound proxy rewrite that derives the public base per request.
+  function maybeProxifyStream(req: http.IncomingMessage, stream: Stream): Stream {
+    if (!proxyOpts) return stream;
+    return proxifyStream(stream, deriveProxyBase(req, proxyOpts.base), proxyOpts.signSecret);
+  }
+  function maybeProxifyPages(req: http.IncomingMessage, pages: Pages): Pages {
+    if (!proxyOpts) return pages;
+    return proxifyPages(pages, deriveProxyBase(req, proxyOpts.base), proxyOpts.signSecret);
+  }
+
   return [
     [
       'GET',
@@ -125,7 +228,7 @@ export function buildRoutes(sdk: Sdk): Array<[string, string, Handler]> {
               | 'walk-relations',
             signal: ac.signal,
           });
-          json(res, 200, stream);
+          json(res, 200, maybeProxifyStream(req, stream));
         } catch (e) {
           json(res, 404, { error: (e as Error).message });
         }
@@ -139,7 +242,7 @@ export function buildRoutes(sdk: Sdk): Array<[string, string, Handler]> {
         const ac = abort(req);
         try {
           const pages = await sdk.pages(decodeURIComponent(params.id), { signal: ac.signal });
-          json(res, 200, pages);
+          json(res, 200, maybeProxifyPages(req, pages));
         } catch (e) {
           json(res, 404, { error: (e as Error).message });
         }
@@ -170,6 +273,131 @@ export function buildRoutes(sdk: Sdk): Array<[string, string, Handler]> {
         } catch (e) {
           json(res, 500, { error: (e as Error).message });
         }
+      },
+    ],
+
+    // ── Downloads ────────────────────────────────────────────────────────
+    // Two-step flow: client opens an SSE connection on /progress to watch
+    // the download complete, then GETs /file with the returned token to
+    // pull the bytes. Avoids tying up a long-lived response with both
+    // progress events and the final blob.
+
+    [
+      'GET',
+      '/download/video/progress',
+      async (req, res, _p, query) => {
+        const episodeId = query.get('episodeId');
+        const language = (query.get('language') ?? 'sub') as 'sub' | 'dub' | 'raw';
+        if (!episodeId) {
+          res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing param: episodeId' }));
+          return;
+        }
+
+        const send = openSse(res);
+        const ac = abort(req);
+        try {
+          send({ type: 'progress', phase: 'resolving', detail: 'Resolving stream…' });
+          const stream = await sdk.stream(decodeURIComponent(episodeId), {
+            language,
+            signal: ac.signal,
+          });
+
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-sdk-dl-'));
+          const safeId = episodeId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32);
+          const filename = `${safeId}.mp4`;
+          const tmpFile = path.join(tmpDir, filename);
+          try {
+            await downloadVideo(stream, tmpFile, {
+              timeoutMs: 1_200_000,
+              onProgress: ({ phase, detail }) => send({ type: 'progress', phase, detail }),
+            });
+            send({ type: 'complete', token: storePending(tmpFile, tmpDir, filename) });
+          } catch (dlErr) {
+            try {
+              fs.unlinkSync(tmpFile);
+            } catch {
+              /* ignore */
+            }
+            try {
+              fs.rmdirSync(tmpDir);
+            } catch {
+              /* ignore */
+            }
+            send({
+              type: 'error',
+              message: dlErr instanceof Error ? dlErr.message : String(dlErr),
+            });
+          }
+        } catch (e) {
+          send({ type: 'error', message: e instanceof Error ? e.message : String(e) });
+        }
+        res.end();
+      },
+    ],
+
+    [
+      'GET',
+      '/download/video/file',
+      async (_req, res, _p, query) => {
+        servePending(res, query.get('token'), 'video/mp4');
+      },
+    ],
+
+    [
+      'GET',
+      '/download/manga/chapter/progress',
+      async (req, res, _p, query) => {
+        const chapterId = query.get('chapterId');
+        if (!chapterId) {
+          res.writeHead(400, { ...CORS, 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Missing param: chapterId' }));
+          return;
+        }
+
+        const send = openSse(res);
+        const ac = abort(req);
+        try {
+          const pages = await sdk.pages(decodeURIComponent(chapterId), { signal: ac.signal });
+
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anime-sdk-dl-'));
+          const safeId = chapterId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 32);
+          const filename = `${safeId}.zip`;
+          const tmpFile = path.join(tmpDir, filename);
+          try {
+            send({ type: 'progress', downloaded: 0, total: pages.pages.length });
+            await downloadMangaChapter(pages, tmpFile, {
+              onProgress: ({ downloaded, total }) => send({ type: 'progress', downloaded, total }),
+            });
+            send({ type: 'complete', token: storePending(tmpFile, tmpDir, filename) });
+          } catch (dlErr) {
+            try {
+              fs.unlinkSync(tmpFile);
+            } catch {
+              /* ignore */
+            }
+            try {
+              fs.rmdirSync(tmpDir);
+            } catch {
+              /* ignore */
+            }
+            send({
+              type: 'error',
+              message: dlErr instanceof Error ? dlErr.message : String(dlErr),
+            });
+          }
+        } catch (e) {
+          send({ type: 'error', message: e instanceof Error ? e.message : String(e) });
+        }
+        res.end();
+      },
+    ],
+
+    [
+      'GET',
+      '/download/manga/chapter/file',
+      async (_req, res, _p, query) => {
+        servePending(res, query.get('token'), 'application/zip');
       },
     ],
   ];

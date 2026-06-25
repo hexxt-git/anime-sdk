@@ -26,10 +26,8 @@ describe('MalSource — live (Jikan)', () => {
   it('info for Cowboy Bebop maps primary fields', async () => {
     const http = new HttpClient({ timeoutMs: 25_000 });
     const source = new MalSource(http);
-    const idFor1 = (await source.search('Cowboy Bebop', 'anime', {})).find(
-      (r) => r.mappings.mal === 1,
-    )!.id;
-    const info = await source.info(idFor1, {});
+    // Sdk.info passes the decoded `r` field. Mirror that contract here.
+    const info = await source.info('anime:1', {});
     expect(info.kind).toBe('anime');
     expect(info.episodeCount).toBe(26);
     expect(info.year).toBe(1998);

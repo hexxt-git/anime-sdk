@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Registry } from '../src/registry.js';
 import type { Source } from '../src/sources/base.js';
 import type { Media } from '../src/types.js';
+import { encodeId } from '../src/internal/id.js';
 
 function makeStubSource(id: string, kinds: ('anime' | 'manga')[], results: Media[]): Source {
   return {
@@ -82,6 +83,98 @@ describe('Registry', () => {
     const ranked = await reg.rankPlaybackSources(media, {});
     expect(ranked).toHaveLength(1);
     expect(ranked[0].status).toBe('incompatible');
+  });
+
+  it('resolveMediaId falls back to title search when lookupByMapping returns null', async () => {
+    const reg = new Registry();
+    const calls: { query: string }[] = [];
+    const playback: Source = {
+      id: 'play',
+      kinds: ['anime'],
+      caps: { search: true, episodes: true, mapping: true },
+      async lookupByMapping() {
+        return null;
+      },
+      async search(q) {
+        calls.push({ query: q });
+        return [
+          {
+            id: encodeId({ t: 'media', s: 'play', r: 'native-id-42' }),
+            kind: 'anime',
+            title: { preferred: "Frieren: Beyond Journey's End" },
+            catalogues: ['play'],
+            playbackSources: ['play'],
+            mappings: {},
+            year: 2023,
+          },
+          {
+            id: encodeId({ t: 'media', s: 'play', r: 'wrong-show' }),
+            kind: 'anime',
+            title: { preferred: 'Totally Unrelated Show' },
+            catalogues: ['play'],
+            playbackSources: ['play'],
+            mappings: {},
+            year: 2023,
+          },
+        ];
+      },
+      async episodes() {
+        return { items: [] };
+      },
+    };
+    reg.register(playback);
+
+    const media: Media = {
+      ...FAKE_MEDIA,
+      title: {
+        preferred: "Frieren: Beyond Journey's End",
+        english: "Frieren: Beyond Journey's End",
+      },
+      year: 2023,
+      mappings: { anilist: 154587 },
+    };
+
+    const resolved = await reg.resolveMediaId(media, playback, {});
+    expect(resolved).toBe('native-id-42');
+    expect(calls.length).toBeGreaterThan(0);
+    // Result is cached on the media for subsequent calls.
+    expect(media.mappings.sources?.play).toBe('native-id-42');
+  });
+
+  it('resolveMediaId rejects fuzzy matches whose year disagrees by more than 1', async () => {
+    const reg = new Registry();
+    const playback: Source = {
+      id: 'play',
+      kinds: ['anime'],
+      caps: { search: true, episodes: true },
+      async search() {
+        return [
+          {
+            // Same title, but wrong year — should be rejected.
+            id: encodeId({ t: 'media', s: 'play', r: 'wrong-year' }),
+            kind: 'anime',
+            title: { preferred: 'Naruto' },
+            catalogues: ['play'],
+            playbackSources: ['play'],
+            mappings: {},
+            year: 2007,
+          },
+        ];
+      },
+      async episodes() {
+        return { items: [] };
+      },
+    };
+    reg.register(playback);
+
+    const media: Media = {
+      ...FAKE_MEDIA,
+      title: { preferred: 'Naruto' },
+      year: 2002,
+    };
+
+    const resolved = await reg.resolveMediaId(media, playback, {});
+    expect(resolved).toBeNull();
   });
 
   it('HealthTracker records and returns stats', () => {

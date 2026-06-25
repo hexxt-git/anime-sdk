@@ -17,11 +17,6 @@ export class MegaPlaySource implements Source {
     baseUrl = 'https://megaplay.buzz',
   ) {
     this.baseUrl = baseUrl;
-    if (!http.getDefaultHeaders()['User-Agent']) {
-      http.setUserAgent(
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      );
-    }
   }
 
   async search(query: string, _kind: 'anime' | 'manga', opts: SourceCallOpts): Promise<Media[]> {

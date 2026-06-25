@@ -1,0 +1,82 @@
+---
+title: Downloads
+description: Save anime episodes as MP4 and manga chapters as ZIP archives.
+---
+
+The SDK ships built-in download utilities for both anime and manga. `ffmpeg` is needed on your `PATH` for HLS video muxing; manga downloads have no external dependency.
+
+## Anime: `downloadVideo`
+
+```ts
+import { createSdk, downloadVideo } from 'anime-sdk';
+
+const sdk = createSdk();
+const results = await sdk.search('Frieren', { kind: 'anime' });
+const { items: episodes } = await sdk.episodes(results[0]);
+const stream = await sdk.stream(episodes[0], { language: 'sub' });
+
+const result = await downloadVideo(stream, './episode-1.mp4', {
+  onProgress: ({ phase, detail }) => console.log(`[${phase}] ${detail ?? ''}`),
+});
+console.log(`Saved ${result.fileSize} bytes → ${result.outputPath}`);
+```
+
+- **HLS streams**: every segment is fetched, PNG-disguised segments are stripped, then `ffmpeg -c copy` muxes the result to MP4.
+- **Direct MP4**: streamed to disk via `fetch`.
+
+Multiple candidates are tried: `stream.url` first, then each `stream.qualities[i].url` until one succeeds.
+
+### Progress reporting
+
+```ts
+await downloadVideo(stream, './episode-1.mp4', {
+  onProgress: ({ phase, detail }) => {
+    // phase: 'resolving' | 'downloading' | 'muxing' | 'complete'
+    console.log(`[${phase}] ${detail ?? ''}`);
+  },
+  timeoutMs: 600_000, // 10 min; default 300_000 (5 min)
+});
+```
+
+## Manga: `downloadMangaChapter`
+
+```ts
+import { downloadMangaChapter } from 'anime-sdk';
+
+const pages = await sdk.pages(chapter);
+const result = await downloadMangaChapter(pages, './chapter-1.zip', {
+  onProgress: ({ downloaded, total }) => console.log(`${downloaded}/${total}`),
+});
+console.log(`${result.pageCount} pages → ${result.outputPath}`);
+```
+
+Pages are packaged as an uncompressed `.zip` (STORE method — images are already JPEG/PNG/WebP, so deflation would be wasted work).
+
+## Manga: `downloadMangaPage`
+
+Single page to disk:
+
+```ts
+import { downloadMangaPage } from 'anime-sdk';
+
+const result = await downloadMangaPage(pages, 0, './scratch/');
+// → './scratch/page_001.jpg', 'image/jpeg', ~340 KB
+```
+
+## HTTP server endpoints
+
+When the bundled server is running, downloads are exposed over HTTP via SSE-progress + token-served file:
+
+```text
+GET /download/video/progress?episodeId=…&language=sub
+GET /download/video/file?token=…
+GET /download/manga/chapter/progress?chapterId=…
+GET /download/manga/chapter/file?token=…
+```
+
+The progress endpoint streams Server-Sent Events while the download runs and returns a `{ type: 'complete', token }` message when finished. The frontend then GETs `/file?token=…` to pull the bytes — the token is single-use and expires after 10 minutes.
+
+## Requirements
+
+- `ffmpeg` on `PATH` for HLS video downloads (not needed for direct MP4 or manga).
+- Node 20+.

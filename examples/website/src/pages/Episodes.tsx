@@ -48,9 +48,17 @@ export default function Episodes() {
       );
     } else {
       const ep = item as api.Episode;
-      navigate(
-        `/stream?epid=${encodeURIComponent(ep.id)}&title=${encodeURIComponent(title)}&mid=${encodeURIComponent(mediaId)}`,
-      );
+      const params = new URLSearchParams({
+        epid: ep.id,
+        title,
+        mid: mediaId,
+      });
+      // Thread the episode's available languages through to the stream page
+      // so its language switcher reflects what's actually playable.
+      if (ep.languages && ep.languages.length > 0) {
+        params.set('langs', ep.languages.join(','));
+      }
+      navigate(`/stream?${params.toString()}`);
     }
   };
 
@@ -76,7 +84,13 @@ export default function Episodes() {
       {isFetching && <p className="text-base-350 px-1 text-xs">fetching...</p>}
       {isError && <p className="px-1 text-xs text-red-900">{String(error)}</p>}
 
-      {items && (
+      {items && items.length === 0 && !isFetching && (
+        <p className="text-base-350 px-1 text-xs">
+          no {isManga ? 'chapters' : 'episodes'} returned from any source
+        </p>
+      )}
+
+      {items && items.length > 0 && (
         <div className="border-base-200 max-h-[70vh] overflow-y-auto border-t">
           {items.map((item) => {
             const ep = item as api.Episode;

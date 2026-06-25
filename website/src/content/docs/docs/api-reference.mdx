@@ -230,7 +230,7 @@ interface Stream {
 }
 ```
 
-`origin.host` is the CDN hostname (never parse `url` to get it).
+`origin.host` is the CDN hostname (never parse `url` to get it). `origin.proxied` is `true` when the server has rewritten `url` to go through `/proxy`.
 
 ### `Pages`
 
@@ -325,7 +325,71 @@ import { startServer } from 'anime-sdk';
 function startServer(opts?: {
   port?: number; // default: 0 (random); set PORT env var for 3030
   sdk?: Sdk; // default: createSdk()
+  proxy?: ProxyOptions; // enable /proxy + URL rewriting
 }): http.Server;
 ```
 
-Returns an `http.Server`. `server.close()` to shut down. See [HTTP Server](/docs/http-server/) for all routes.
+Returns an `http.Server`. `server.close()` to shut down. See [HTTP Server](/docs/http-server/) for all routes and [Stream Proxy](/docs/proxy/) for proxy configuration.
+
+### `ProxyOptions`
+
+```ts
+interface ProxyOptions {
+  base?: string; // public base URL override (defaults to Host header)
+  signSecret?: string; // HMAC-SHA256 sign every proxied URL
+  allowedHosts?: string[]; // suffix-matched SSRF allowlist
+}
+```
+
+---
+
+## Download utilities
+
+### `downloadVideo(stream, outputPath, opts?)`
+
+```ts
+import { downloadVideo } from 'anime-sdk';
+
+function downloadVideo(
+  stream: Stream,
+  outputPath: string,
+  opts?: {
+    onProgress?: (info: { phase: string; detail?: string }) => void;
+    timeoutMs?: number; // default 300_000 (5 min)
+    headers?: Record<string, string>; // override stream.headers
+  },
+): Promise<{ outputPath: string; fileSize: number }>;
+```
+
+HLS streams: walks master → variant, downloads every segment (stripping PNG-disguised TS bytes), then `ffmpeg -c copy` muxes to MP4. Direct MP4 streams to disk. Tries `stream.url`, then each `stream.qualities[i].url` until one succeeds.
+
+### `downloadMangaChapter(pages, outputPath, opts?)`
+
+```ts
+import { downloadMangaChapter } from 'anime-sdk';
+
+function downloadMangaChapter(
+  pages: Pages,
+  outputPath: string,
+  opts?: {
+    onProgress?: (info: { downloaded: number; total: number }) => void;
+    timeoutMs?: number; // per page; default 30_000
+    headers?: Record<string, string>;
+  },
+): Promise<{ outputPath: string; pageCount: number; fileSize: number }>;
+```
+
+Packages all pages as an uncompressed `.zip`.
+
+### `downloadMangaPage(pages, pageIndex, outputDir, opts?)`
+
+```ts
+import { downloadMangaPage } from 'anime-sdk';
+
+function downloadMangaPage(
+  pages: Pages,
+  pageIndex: number,
+  outputDir: string,
+  opts?: { headers?: Record<string, string>; timeoutMs?: number },
+): Promise<{ outputPath: string; pageIndex: number; fileSize: number; contentType: string }>;
+```

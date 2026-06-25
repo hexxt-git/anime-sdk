@@ -45,6 +45,8 @@ export default defineConfig({
           ],
         },
         { label: 'HTTP Server', link: '/docs/http-server/' },
+        { label: 'Stream Proxy', link: '/docs/proxy/' },
+        { label: 'Downloads', link: '/docs/download/' },
         { label: 'API Reference', link: '/docs/api-reference/' },
         { label: 'Contributing', link: '/docs/contributing/' },
       ],

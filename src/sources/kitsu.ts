@@ -1,5 +1,5 @@
 import { HttpClient } from '../internal/http.js';
-import { encodeId, decodeId } from '../internal/id.js';
+import { encodeId } from '../internal/id.js';
 import type { Media, List } from '../types.js';
 import type { Source, SourceCallOpts } from './base.js';
 
@@ -97,16 +97,17 @@ export class KitsuSource implements Source {
     return ((json?.data as any[]) ?? []).map((r) => mapNode(r, path, this.id));
   }
 
-  async info(id: string, opts: SourceCallOpts): Promise<Media> {
-    const { r: raw } = decodeId(id);
-    const sep = raw.indexOf(':');
+  async info(rawId: string, opts: SourceCallOpts): Promise<Media> {
+    // Sdk.info passes the decoded `r` field — "<kind>:<kitsuId>" (set in
+    // mapNode) or, for legacy callers, a bare numeric id.
+    const sep = rawId.indexOf(':');
     let path: 'anime' | 'manga' = 'anime';
-    let rawId = raw;
-    if (sep >= 0 && (raw.slice(0, sep) === 'anime' || raw.slice(0, sep) === 'manga')) {
-      path = raw.slice(0, sep) as 'anime' | 'manga';
-      rawId = raw.slice(sep + 1);
+    let id = rawId;
+    if (sep >= 0 && (rawId.slice(0, sep) === 'anime' || rawId.slice(0, sep) === 'manga')) {
+      path = rawId.slice(0, sep) as 'anime' | 'manga';
+      id = rawId.slice(sep + 1);
     }
-    const url = `${this.apiUrl}/${path}/${rawId}?include=genres,categories,mappings`;
+    const url = `${this.apiUrl}/${path}/${id}?include=genres,categories,mappings`;
     const res = await this.http.get(url, {
       headers: { Accept: 'application/vnd.api+json' },
       signal: opts.signal,
@@ -114,7 +115,7 @@ export class KitsuSource implements Source {
     if (res.status !== 200) throw new Error(`Kitsu info failed: ${res.status}`);
     const json = (await res.json()) as any;
     const r = json?.data;
-    if (!r) throw new Error(`Kitsu: no media for id ${raw}`);
+    if (!r) throw new Error(`Kitsu: no media for id ${rawId}`);
     const included: any[] = json?.included ?? [];
     const extraMappings = pickMappings(included, r.relationships?.mappings?.data);
     return mapNode(r, path, this.id, extraMappings);

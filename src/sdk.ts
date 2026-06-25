@@ -38,21 +38,28 @@ const ALL_SOURCE_IDS = [
 
 export type SourceId = (typeof ALL_SOURCE_IDS)[number];
 
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 function buildSources(http: HttpClient, enabled: ReadonlyArray<string>) {
   const set = new Set(enabled);
+  // Sources that require a browser-style User-Agent get their own HttpClient
+  // clone so they don't bleed the UA onto API-only sources (AniList, MangaDex,
+  // Jikan) whose servers return 400/HTML when they see a Chrome UA.
+  const browserHttp = http.withHeaders({ 'User-Agent': BROWSER_UA });
   const all = [
     new AnilistSource(http),
     new MalSource(http),
     new KitsuSource(http),
-    new AllmangaSource(http),
-    new MegaPlaySource(http),
+    new AllmangaSource(browserHttp),
+    new MegaPlaySource(browserHttp),
     new AnimeParadiseSource(http),
-    new AnikotoSource(http),
-    new GogoanimeSource(http),
-    new GoyabuSource(http),
+    new AnikotoSource(browserHttp),
+    new GogoanimeSource(browserHttp),
+    new GoyabuSource(browserHttp),
     new MangadexSource(http),
     new MangapillSource(http),
-    new WeebcentralSource(http),
+    new WeebcentralSource(browserHttp),
   ];
   return all.filter((s) => set.has(s.id));
 }

@@ -98,6 +98,28 @@ export class HttpClient {
     return this.defaultHeaders;
   }
 
+  /**
+   * Return a new HttpClient that merges `headers` on top of this instance's
+   * defaults, sharing the same rate-limiter, transport, and retry config.
+   * Use this to give a source its own header set without forking the rate
+   * budget or creating a second transport.
+   */
+  public withHeaders(headers: Record<string, string>): HttpClient {
+    const clone = new HttpClient({
+      proxyUrl: this.proxyUrl,
+      proxyType: this.proxyType,
+      proxyQueryParam: this.proxyQueryParam,
+      defaultHeaders: { ...this.defaultHeaders, ...headers },
+      timeoutMs: this.timeoutMs,
+      transport: this.transport,
+      disableRateLimit: true, // we'll inject the shared limiter below
+      retry: this.retryConfig,
+    });
+    // Share the parent's rate-limiter so all sources stay within one budget.
+    clone.rateLimiter = this.rateLimiter;
+    return clone;
+  }
+
   public requestUrl(url: string): string {
     if (!this.proxyUrl) return url;
     if (this.proxyType === 'prepend') {

@@ -76,6 +76,36 @@ createSdk({
 });
 ```
 
+### Proxy (browser-playable URLs)
+
+```ts
+import { startServer } from 'anime-sdk';
+
+startServer({
+  port: 3030,
+  proxy: {
+    signSecret: process.env.PROXY_SIGN_SECRET,
+    allowedHosts: ['cdn.example.com'],
+  },
+});
+```
+
+`stream.url`, subtitle URLs, and `pages[].url` are rewritten through `/proxy`. `stream.origin.proxied` becomes `true`; `stream.origin.host` still reports the real CDN.
+
+### Downloads
+
+```ts
+import { downloadVideo, downloadMangaChapter } from 'anime-sdk';
+
+const stream = await sdk.stream(episode, { language: 'sub' });
+await downloadVideo(stream, './episode-1.mp4', {
+  onProgress: ({ phase, detail }) => console.log(`[${phase}] ${detail ?? ''}`),
+});
+
+const pages = await sdk.pages(chapter);
+await downloadMangaChapter(pages, './chapter-1.zip');
+```
+
 ### Error handling
 
 ```ts
@@ -137,10 +167,10 @@ GET /health                          → SourceHealth[]
 
 ## API reference
 
-Public exports: `createSdk`, `Sdk`, `startServer`, `ServerOptions`, `AniError`, `AniErrorCode`, `Media`, `Episode`, `Chapter`, `Stream`, `Pages`, `List`, `SourceInfo`, `SdkOptions`, `Score`.
+Public exports: `createSdk`, `Sdk`, `startServer`, `ServerOptions`, `ProxyOptions`, `downloadVideo`, `downloadMangaChapter`, `downloadMangaPage`, `AniError`, `AniErrorCode`, `Media`, `Episode`, `Chapter`, `Stream`, `Pages`, `List`, `SourceInfo`, `SdkOptions`, `Score`.
 
 All types are plain POJOs — `JSON.stringify` round-trips, safe for React state, Zustand, Redux.
 
 ## Requirements
 
-Node 20+. `ffmpeg` on `PATH` (E2E test suite only).
+Node 20+. `ffmpeg` on `PATH` for HLS video downloads (and the E2E test suite).

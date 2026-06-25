@@ -12,13 +12,7 @@ export class AnikotoSource implements Source {
   private readonly baseUrl = 'https://anikototv.to';
   private readonly apiUrl = 'https://anikotoapi.site';
 
-  constructor(private http: HttpClient) {
-    if (!http.getDefaultHeaders()['User-Agent']) {
-      http.setUserAgent(
-        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      );
-    }
-  }
+  constructor(private http: HttpClient) {}
 
   async search(query: string, _kind: 'anime' | 'manga', opts: SourceCallOpts): Promise<Media[]> {
     const res = await this.http.get(`${this.baseUrl}/filter?keyword=${encodeURIComponent(query)}`, {

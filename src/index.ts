@@ -18,4 +18,15 @@ export type { SdkOptions } from './config.js';
 
 // ── Server ────────────────────────────────────────────────────────────────────
 export { startServer } from './server/index.js';
-export type { ServerOptions } from './server/index.js';
+export type { ServerOptions, ProxyOptions } from './server/index.js';
+
+// ── Downloads ─────────────────────────────────────────────────────────────────
+export { downloadVideo, downloadMangaPage, downloadMangaChapter } from './download/index.js';
+export type {
+  DownloadVideoOptions,
+  DownloadVideoResult,
+  DownloadMangaPageOptions,
+  DownloadMangaPageResult,
+  DownloadMangaChapterOptions,
+  DownloadMangaChapterResult,
+} from './download/index.js';

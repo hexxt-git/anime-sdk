@@ -1,0 +1,69 @@
+---
+title: Stream Proxy
+description: Route video streams through the SDK server so browsers can play them without CORS or header restrictions.
+---
+
+Most streaming CDNs block cross-origin requests and require a specific `Referer` or `User-Agent`. Browsers can't set those headers freely, so direct playback from a web app fails. The built-in proxy fetches video data server-side and re-emits it with full CORS headers.
+
+## Enabling the proxy
+
+Pass `proxy` to `startServer`:
+
+```ts
+import { startServer } from 'anime-sdk';
+
+startServer({
+  port: 3030,
+  proxy: {
+    signSecret: process.env.PROXY_SIGN_SECRET, // HMAC-sign upstream URLs (recommended in prod)
+    allowedHosts: ['cdn.example.com'], // SSRF allowlist (optional but recommended)
+  },
+});
+```
+
+Or via the CLI — any `PROXY_*` env var turns it on:
+
+```sh
+PROXY_SIGN_SECRET=$(openssl rand -hex 32) npx anime-sdk
+```
+
+When enabled, three things happen:
+
+1. A `GET /proxy?url=…` endpoint is exposed.
+2. Every `stream.url`, `stream.qualities[i].url`, and `subtitles[i].url` in `/episode/:id/stream` responses is rewritten through `/proxy` with the required headers encoded in the URL.
+3. Every `pages[i].url` in `/chapter/:id/pages` responses is rewritten too.
+4. `stream.origin.proxied` becomes `true` and `stream.origin.host` still reports the real CDN hostname.
+
+Your frontend uses `stream.url` as-is — no extra headers needed.
+
+## URL shape
+
+```text
+http://localhost:3030/proxy
+  ?url=<encoded upstream URL>
+  &h=<base64 JSON of headers to attach>
+  &sig=<HMAC-SHA256 hex when signSecret is set>
+  &ct=<content-type override, optional>
+```
+
+HLS manifests served through `/proxy` are parsed inline; every variant playlist, key, and segment URI is rewritten so that the entire manifest chain stays proxied.
+
+## SSRF defence
+
+`allowedHosts` is a suffix-matched allowlist. An entry like `wixstatic.com` covers `static.wixstatic.com` and any other subdomain. With no allowlist, `/proxy` will fetch any hostname — fine for local development, dangerous on a public deployment.
+
+## Signed URLs
+
+Set `signSecret` and the server signs every URL it emits with HMAC-SHA256 over the target URL (plus the `h` payload when present). Requests without a valid `sig` get a 401. Use this on anything reachable from the public internet.
+
+## Behind a reverse proxy
+
+When the public URL differs from what Node sees (e.g. `https://api.example.com` reverse-proxied to `127.0.0.1:3030`), pass `proxy.base`:
+
+```ts
+startServer({
+  proxy: { base: 'https://api.example.com', signSecret: process.env.PROXY_SIGN_SECRET },
+});
+```
+
+The server otherwise derives the base from each request's `Host` header.
